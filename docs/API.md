@@ -1,6 +1,6 @@
 # API summary
 
-All mutation routes require `Authorization: Bearer <token>`. The development identities are `demo-admin`, `demo-hod`, `demo-faculty`, and `demo-student`; only ADMIN/HOD can mutate.
+All mutation routes require `Authorization: Bearer <token>`. Development identities are `demo-admin`, `demo-hod`, `demo-faculty`, and `demo-student`. Until department-scoped HOD authorization exists, only **ADMIN** may perform college-wide mutations. HOD may read and run candidate-aware preflight / grounded tools.
 
 | Method | Route | Purpose |
 |---|---|---|
@@ -9,7 +9,7 @@ All mutation routes require `Authorization: Bearer <token>`. The development ide
 | GET | `/api/dashboard` | Derived, non-fabricated counts and latest run/version |
 | GET | `/api/{departments,programs,levels,divisions,batches,subjects,faculty,resources,requirements,policies}` | Configured domain entities |
 | POST | `/api/:collection` | Authorized setup write (demo repository) |
-| POST | `/api/generation/preflight` | Blocking input validation and snapshot counts |
+| POST | `/api/generation/preflight` | Candidate-aware blockers (time block, faculty, resource, capacity, capability, availability) |
 | POST | `/api/generation/run` | Build sessions, generate candidates, solve, validate and version |
 | GET | `/api/generation/runs` | Traceable generation runs |
 | GET | `/api/timetables/versions` | Version list |
@@ -19,6 +19,8 @@ All mutation routes require `Authorization: Bearer <token>`. The development ide
 | POST | `/api/ai/interpret` | Entity-grounded policy proposal or clarification |
 | POST | `/api/ai/proposals/:id/confirm` | Confirm and invoke typed `createPolicy` tool |
 | POST | `/api/ai/explain` | Explain an assignment from actual assignment/resource/policy evidence |
+| POST | `/api/ai/tools` | Grounded read tools: `eligibleResources`, `currentConflicts`, `unscheduledSessions`, `generationDiagnostics` |
+| GET | `/api/ai/tools/:tool` | Same grounded tools via query arguments |
 
 Errors have `{ error: { code, message, ...details } }`. Generation infeasibility has a run result with structured `diagnostics[]`, including actual rejection evidence when a session has no candidates.
 

@@ -55,7 +55,7 @@ Current tools are `interpretPolicy`, `createPolicy` (confirmation required), and
 
 ## Lifecycle and concurrency
 
-Allowed progression is `DRAFT → GENERATED → VALIDATED → REVIEWED → APPROVED → PUBLISHED`. A published version is immutable; edits require a child version. In production, transitions and manual moves must use database transactions with optimistic version checks. Generation runs capture status, session/candidate counts, duration, solver result, objective metrics and diagnostics.
+Allowed progression is `DRAFT → GENERATED → VALIDATED → REVIEWED → APPROVED → PUBLISHED`. A published version is immutable; edits require a child version. Generation, import confirmation and manual moves run inside database transactions. Published entry/slot mutation is rejected by the API and by PostgreSQL triggers. Generation runs capture status, session/candidate counts, duration, solver result, objective metrics and diagnostics. College-wide mutations are ADMIN-only until HOD department scoping exists. Demo seed data is explicit (`CHRONOS_SEED_DEMO=1` / `npm run db:seed`) and is not created by production bootstrap.
 
 ## Risks and mitigations
 

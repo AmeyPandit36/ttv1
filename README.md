@@ -22,7 +22,7 @@ Prerequisites: Node 22+ and Python 3.11+. The local application embeds a durable
 npm install
 python3 -m venv .venv
 .venv/bin/pip install -r scheduler/requirements.txt
-npm run dev
+CHRONOS_SEED_DEMO=1 npm run dev
 ```
 
 Open `http://localhost:5173` and sign in with `admin@chronos.local` / `Chronos123!`. The API listens on `0.0.0.0:4000`; Vite serves on `0.0.0.0:5173` and proxies browser `/api` calls. The included durable embedded database is migrated and seeded automatically, so the integrated workflow runs without external infrastructure: 2026–27, IT/CSE departments, Third Year A/B, batches A1/A2, faculty availability/workloads, classroom/labs/capabilities, lectures/practicals and a department-resource policy.
@@ -62,6 +62,7 @@ npm audit --omit=dev
 - Durable embedded PostgreSQL-compatible persistence with restart hydration.
 - Validated CSV import preview/confirmation and canonical timetable CSV export.
 - Faculty/resource availability editors, student enrollment, setup forms, manual move UI and lifecycle review/publish controls.
+- Phase 2 hardening: candidate-aware preflight, persisted faculty eligibility, required-resource and minimum-capacity enforcement, hard/soft daily-period policies, expanded independent validator, transactional generation/import/move, published immutability, ADMIN-only college-wide writes, setup/import reference checks, and grounded AI read tools.
 
 ## Known limitations
 

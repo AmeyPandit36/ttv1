@@ -7,15 +7,47 @@ import { hash } from 'bcryptjs';
 import { departments, programs, levels, divisions, batches, enrollments, faculty, resources, subjects, requirements, policies, slots, versions, runs, buildSessions } from './store.js';
 import { validateTimetable } from '@chronos/domain';
 const isTest = process.env.NODE_ENV === 'test' || process.env.VITEST === 'true';
+const allowDemoSeed = isTest || process.env.CHRONOS_SEED_DEMO === '1';
 const dataDir = fileURLToPath(new URL('../../../data', import.meta.url));
 if (!isTest)
     mkdirSync(dataDir, { recursive: true });
 export const db = new PGlite(isTest ? undefined : `${dataDir}/chronos`);
-const migration = fileURLToPath(new URL('../../../prisma/migrations/20260819000000_initial/migration.sql', import.meta.url));
+const initialMigration = fileURLToPath(new URL('../../../prisma/migrations/20260819000000_initial/migration.sql', import.meta.url));
+const phase2Migration = fileURLToPath(new URL('../../../prisma/migrations/20260819100000_phase2_hardening/migration.sql', import.meta.url));
 const q = (sql, p = []) => db.query(sql, p);
-async function migrate() { const exists = await db.query(`SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name='Department') x`); if (exists.rows[0]?.x)
-    return; let sql = await readFile(migration, 'utf8'); await db.exec(sql.replace('CREATE EXTENSION IF NOT EXISTS pgcrypto;', '').replaceAll(' DEFAULT gen_random_uuid()::text', '')); }
+export async function withTransaction(fn) {
+    await db.exec('BEGIN');
+    try {
+        const result = await fn();
+        await db.exec('COMMIT');
+        return result;
+    }
+    catch (error) {
+        try { await db.exec('ROLLBACK'); } catch {}
+        throw error;
+    }
+}
+async function applySql(file) {
+    const sql = await readFile(file, 'utf8');
+    await db.exec(sql.replace('CREATE EXTENSION IF NOT EXISTS pgcrypto;', '').replaceAll(' DEFAULT gen_random_uuid()::text', ''));
+}
+async function migrate() {
+    await db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations ("id" text PRIMARY KEY, "appliedAt" timestamptz NOT NULL DEFAULT now())`);
+    const applied = new Set((await db.query(`SELECT "id" FROM schema_migrations`)).rows.map(row => String(row.id)));
+    const department = await db.query(`SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name='Department') x`);
+    if (!applied.has('20260819000000_initial')) {
+        if (!department.rows[0]?.x) await applySql(initialMigration);
+        await db.query(`INSERT INTO schema_migrations("id") VALUES ('20260819000000_initial')`);
+    }
+    if (!applied.has('20260819100000_phase2_hardening')) {
+        try { await applySql(phase2Migration); }
+        catch (error) { console.warn('Phase 2 immutability trigger not applied:', error instanceof Error ? error.message : error); }
+        await db.query(`INSERT INTO schema_migrations("id") VALUES ('20260819100000_phase2_hardening')`);
+    }
+}
 async function seed() {
+    if (!allowDemoSeed)
+        return;
     const n = await db.query(`SELECT count(*)::int n FROM "AcademicYear"`);
     if (Number(n.rows[0]?.n))
         return;
@@ -46,6 +78,9 @@ async function seed() {
         await q(`INSERT INTO "Faculty"("id","employeeCode","name","email","departmentId","maxPeriodsPerWeek","maxConsecutivePeriods") VALUES ($1,$2,$3,$4,$5,$6,$7)`, [f.id, f.id, f.name, `${f.id}@chronos.local`, f.departmentId, f.maxPeriodsPerWeek, f.maxConsecutive]);
     for (const s of subjects)
         await q(`INSERT INTO "Subject"("id","code","name","departmentId") VALUES ($1,$2,$3,$4)`, [s.id, s.code, s.name, s.departmentId]);
+    for (const f of faculty)
+        for (const subjectId of f.eligibleSubjectIds ?? [])
+            await q(`INSERT INTO "FacultySubjectEligibility"("facultyId","subjectId","active") VALUES ($1,$2,true)`, [f.id, subjectId]);
     await q(`INSERT INTO "ScheduleProfile"("id","name","academicYearId") VALUES ('profile-26','Standard Week','ay-26')`);
     const dayNames = { mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday', fri: 'Friday' };
     for (const [i, day] of Object.keys(dayNames).entries()) {
@@ -70,7 +105,7 @@ async function seed() {
         await persistPolicy(p);
     await q(`INSERT INTO "Timetable"("id","name","academicYearId","profileId") VALUES ('timetable-26','College Timetable 2026–27','ay-26','profile-26')`);
 }
-async function insertRequirement(e) { await q(`INSERT INTO "TeachingRequirement"("id","subjectId","facultyId","sessionType","durationPeriods","weeklyFrequency","resourceType","minCapacity","preferences") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'{}')`, [e.id, e.subjectId, e.facultyId, e.sessionType, e.duration, e.weeklyFrequency, e.resourceType, e.minCapacity ?? null]); for (const id of e.divisionIds ?? [])
+async function insertRequirement(e) { await q(`INSERT INTO "TeachingRequirement"("id","subjectId","facultyId","sessionType","durationPeriods","weeklyFrequency","resourceType","minCapacity","requiredResourceId","preferences") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'{}')`, [e.id, e.subjectId, e.facultyId, e.sessionType, e.duration, e.weeklyFrequency, e.resourceType, e.minCapacity ?? null, e.requiredResourceId ?? null]); for (const id of e.divisionIds ?? [])
     await q(`INSERT INTO "RequirementCohort"("id","requirementId","divisionId") VALUES ($1,$2,$3)`, [`rc-${e.id}-${id}`, e.id, id]); for (const id of e.batchIds ?? [])
     await q(`INSERT INTO "RequirementCohort"("id","requirementId","batchId") VALUES ($1,$2,$3)`, [`rc-${e.id}-${id}`, e.id, id]); for (const name of e.requiredCapabilities ?? []) {
     const cap = await db.query(`SELECT "id" FROM "Capability" WHERE lower("name")=lower($1)`, [name]);
@@ -88,11 +123,12 @@ async function hydrate() {
     replace(enrollments, (await db.query(`SELECT e."id",s."rollNumber",s."name" "studentName",e."divisionId",e."batchId",e."validFrom" FROM "Enrollment" e JOIN "Student" s ON s."id"=e."studentId"`)).rows);
     replace(subjects, (await db.query(`SELECT "id","code","name","departmentId","programId","academicLevelId","semester","active" FROM "Subject"`)).rows);
     const fs = (await db.query(`SELECT "id","name","departmentId","maxPeriodsPerWeek","maxConsecutivePeriods" "maxConsecutive" FROM "Faculty" WHERE "active"=true`)).rows, fas = (await db.query(`SELECT "facultyId","timeSlotId","kind" FROM "FacultyAvailability" WHERE "timeSlotId" IS NOT NULL`)).rows;
-    faculty.splice(0, faculty.length, ...fs.map(f => ({ ...f,maxPeriodsPerWeek:f.maxPeriodsPerWeek??undefined,maxConsecutive:f.maxConsecutive??undefined, unavailableSlotIds: fas.filter(a => a.facultyId === f.id && a.kind === 'UNAVAILABLE').map(a => a.timeSlotId), preferredSlotIds: fas.filter(a => a.facultyId === f.id && a.kind === 'PREFERRED').map(a => a.timeSlotId) })));
+    const elig = (await db.query(`SELECT "facultyId","subjectId" FROM "FacultySubjectEligibility" WHERE "active"=true`)).rows;
+    faculty.splice(0, faculty.length, ...fs.map(f => ({ ...f,maxPeriodsPerWeek:f.maxPeriodsPerWeek??undefined,maxConsecutive:f.maxConsecutive??undefined, eligibleSubjectIds: elig.filter(e => e.facultyId === f.id).map(e => e.subjectId), unavailableSlotIds: fas.filter(a => a.facultyId === f.id && a.kind === 'UNAVAILABLE').map(a => a.timeSlotId), preferredSlotIds: fas.filter(a => a.facultyId === f.id && a.kind === 'PREFERRED').map(a => a.timeSlotId) })));
     const rs = (await db.query(`SELECT r."id",r."name",r."type",r."capacity",r."departmentId",f."buildingId",r."active" FROM "Resource" r LEFT JOIN "Floor" f ON f."id"=r."floorId"`)).rows, rc = (await db.query(`SELECT rc."resourceId",c."name" FROM "ResourceCapability" rc JOIN "Capability" c ON c."id"=rc."capabilityId"`)).rows, ras = (await db.query(`SELECT "resourceId","timeSlotId" FROM "ResourceAvailability" WHERE "kind"='UNAVAILABLE'`)).rows;
     resources.splice(0, resources.length, ...rs.map(r => ({ ...r, departmentId:r.departmentId??undefined,buildingId:r.buildingId??undefined, capabilities: rc.filter(c => c.resourceId === r.id).map(c => c.name), unavailableSlotIds: ras.filter(a => a.resourceId === r.id).map(a => a.timeSlotId) })));
-    const req = (await db.query(`SELECT "id","subjectId","facultyId","sessionType","durationPeriods" "duration","weeklyFrequency","resourceType","minCapacity","active" FROM "TeachingRequirement" WHERE "active"=true`)).rows, co = (await db.query(`SELECT "requirementId","divisionId","batchId" FROM "RequirementCohort"`)).rows, caps = (await db.query(`SELECT x."requirementId",c."name",x."required" FROM "RequirementCapability" x JOIN "Capability" c ON c."id"=x."capabilityId"`)).rows;
-    requirements.splice(0, requirements.length, ...req.map(r => ({ ...r, divisionIds: co.filter(x => x.requirementId === r.id && x.divisionId).map(x => x.divisionId), batchIds: co.filter(x => x.requirementId === r.id && x.batchId).map(x => x.batchId), requiredCapabilities: caps.filter(x => x.requirementId === r.id && x.required).map(x => x.name), preferredCapabilities: caps.filter(x => x.requirementId === r.id && !x.required).map(x => x.name) })));
+    const req = (await db.query(`SELECT "id","subjectId","facultyId","sessionType","durationPeriods" "duration","weeklyFrequency","resourceType","minCapacity","requiredResourceId","active" FROM "TeachingRequirement" WHERE "active"=true`)).rows, co = (await db.query(`SELECT "requirementId","divisionId","batchId" FROM "RequirementCohort"`)).rows, caps = (await db.query(`SELECT x."requirementId",c."name",x."required" FROM "RequirementCapability" x JOIN "Capability" c ON c."id"=x."capabilityId"`)).rows;
+    requirements.splice(0, requirements.length, ...req.map(r => ({ ...r, minCapacity: r.minCapacity ?? undefined, requiredResourceId: r.requiredResourceId ?? undefined, divisionIds: co.filter(x => x.requirementId === r.id && x.divisionId).map(x => x.divisionId), batchIds: co.filter(x => x.requirementId === r.id && x.batchId).map(x => x.batchId), requiredCapabilities: caps.filter(x => x.requirementId === r.id && x.required).map(x => x.name), preferredCapabilities: caps.filter(x => x.requirementId === r.id && !x.required).map(x => x.name) })));
     const ps = (await db.query(`SELECT "id","name","description","ruleType" "type","strength","priority" "weight","scope","parameters","active","version" FROM "SchedulingPolicy" WHERE "active"=true`)).rows;
     policies.splice(0, policies.length, ...ps);
     versions.length = 0;
@@ -133,20 +169,50 @@ export async function persistEntity(c, e) { if (c === 'departments')
     return;
 } if (c === 'requirements')
     return insertRequirement(e); throw new Error(`Persistent create unavailable for ${c}`); }
+export async function persistEntities(collection, rows) {
+    return withTransaction(async () => {
+        for (const row of rows) await persistEntity(collection, row);
+    });
+}
 export async function persistPolicy(p) { await q(`INSERT INTO "SchedulingPolicy"("id","name","description","ruleType","strength","priority","scope","parameters","active","version") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT ("id") DO UPDATE SET "name"=excluded."name","scope"=excluded."scope","parameters"=excluded."parameters","active"=excluded."active","version"=excluded."version"`, [p.id, p.name, p.description, p.type, p.strength, p.weight, JSON.stringify(p.scope), JSON.stringify(p.parameters), p.active, p.version]); }
-export async function persistGeneration(run: any, v: any = undefined) { if (v) {
-    await q(`INSERT INTO "TimetableVersion"("id","timetableId","version","status") VALUES ($1,'timetable-26',$2,$3)`, [v.id, v.version, v.status]);
-    for (const a of v.assignments) {
-        const id = `entry-${v.id}-${a.sessionId}`;
-        await q(`INSERT INTO "TimetableEntry"("id","versionId","sessionId","resourceId") VALUES ($1,$2,$3,$4)`, [id, v.id, a.sessionId, a.resourceId]);
+export async function nextVersionNumber() {
+    const result = await db.query(`SELECT COALESCE(max("version"),0)+1 n FROM "TimetableVersion" WHERE "timetableId"='timetable-26'`);
+    return Number(result.rows[0]?.n ?? 1);
+}
+export async function persistGeneration(run: any, v: any = undefined) {
+    return withTransaction(async () => {
+        if (v) {
+            await q(`INSERT INTO "TimetableVersion"("id","timetableId","version","status") VALUES ($1,'timetable-26',$2,$3)`, [v.id, v.version, v.status]);
+            for (const a of v.assignments) {
+                const id = `entry-${v.id}-${a.sessionId}`;
+                await q(`INSERT INTO "TimetableEntry"("id","versionId","sessionId","resourceId") VALUES ($1,$2,$3,$4)`, [id, v.id, a.sessionId, a.resourceId]);
+                for (const [i, s] of a.slotIds.entries())
+                    await q(`INSERT INTO "TimetableEntrySlot" VALUES ($1,$2,$3)`, [id, s, i]);
+            }
+            if (v.validation)
+                await q(`INSERT INTO "ValidationResult"("id","versionId","valid","metrics") VALUES ($1,$2,$3,$4)`, [`validation-${v.id}`, v.id, v.validation.valid, JSON.stringify(v.validation.metrics)]);
+        }
+        await q(`INSERT INTO "GenerationRun"("id","versionId","status","sessionCount","candidateCount","solverStatus","solverDurationMs","objectiveMetrics","diagnostics","startedAt","completedAt") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [run.id, v?.id ?? null, run.status === 'INFEASIBLE' ? 'INFEASIBLE' : run.status === 'FAILED' ? 'FAILED' : 'SUCCEEDED', Number(run.result?.metrics?.sessions ?? 0), Number(run.result?.metrics?.candidates ?? 0), run.result?.status ?? null, Number(run.result?.metrics?.solverDurationMs ?? 0), JSON.stringify(run.result?.metrics ?? {}), JSON.stringify(run.result?.diagnostics ?? []), run.startedAt, run.completedAt]);
+    });
+}
+export async function assertVersionMutable(id) {
+    const result = await db.query(`SELECT "status" FROM "TimetableVersion" WHERE "id"=$1`, [id]);
+    if (result.rows[0]?.status === 'PUBLISHED') {
+        const error = new Error('Published timetable is immutable');
+        (error as {code?: string}).code = 'PUBLISHED_IMMUTABLE';
+        throw error;
+    }
+}
+export async function persistMove(v, sid) {
+    return withTransaction(async () => {
+        await assertVersionMutable(v.id);
+        const a = v.assignments.find(x => x.sessionId === sid), id = `entry-${v.id}-${sid}`;
+        await q(`UPDATE "TimetableEntry" SET "resourceId"=$1,"source"='MANUAL' WHERE "id"=$2`, [a.resourceId, id]);
+        await q(`DELETE FROM "TimetableEntrySlot" WHERE "entryId"=$1`, [id]);
         for (const [i, s] of a.slotIds.entries())
             await q(`INSERT INTO "TimetableEntrySlot" VALUES ($1,$2,$3)`, [id, s, i]);
-    }
-    if (v.validation)
-        await q(`INSERT INTO "ValidationResult"("id","versionId","valid","metrics") VALUES ($1,$2,$3,$4)`, [`validation-${v.id}`, v.id, v.validation.valid, JSON.stringify(v.validation.metrics)]);
-} await q(`INSERT INTO "GenerationRun"("id","versionId","status","sessionCount","candidateCount","solverStatus","solverDurationMs","objectiveMetrics","diagnostics","startedAt","completedAt") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [run.id, v?.id ?? null, run.status === 'INFEASIBLE' ? 'INFEASIBLE' : run.status === 'FAILED' ? 'FAILED' : 'SUCCEEDED', Number(run.result?.metrics.sessions ?? 0), Number(run.result?.metrics.candidates ?? 0), run.result?.status ?? null, Number(run.result?.metrics.solverDurationMs ?? 0), JSON.stringify(run.result?.metrics ?? {}), JSON.stringify(run.result?.diagnostics ?? []), run.startedAt, run.completedAt]); }
-export async function persistMove(v, sid) { const a = v.assignments.find(x => x.sessionId === sid), id = `entry-${v.id}-${sid}`; await q(`UPDATE "TimetableEntry" SET "resourceId"=$1,"source"='MANUAL' WHERE "id"=$2`, [a.resourceId, id]); await q(`DELETE FROM "TimetableEntrySlot" WHERE "entryId"=$1`, [id]); for (const [i, s] of a.slotIds.entries())
-    await q(`INSERT INTO "TimetableEntrySlot" VALUES ($1,$2,$3)`, [id, s, i]); }
+    });
+}
 export async function persistTransition(id, status) { await q(`UPDATE "TimetableVersion" SET "status"=$1::"TimetableStatus","updatedAt"=now() WHERE "id"=$2`, [status, id]); if (status === 'PUBLISHED')
     await q(`UPDATE "TimetableVersion" SET "publishedAt"=now() WHERE "id"=$1`, [id]); }
 export async function audit(actorId, action, type, id, after) { await q(`INSERT INTO "AuditEvent"("id","actorId","action","entityType","entityId","after") VALUES ($1,$2,$3,$4,$5,$6)`, [crypto.randomUUID(), actorId, action, type, id, JSON.stringify(after)]); }

@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n api,web -c blue,green \"npm:dev -w @chronos/api\" \"npm:dev -w @chronos/web\"",
+    "dev": "CHRONOS_SEED_DEMO=1 concurrently -n api,web -c blue,green \"npm:dev -w @chronos/api\" \"npm:dev -w @chronos/web\"",
     "build": "npm run build -w @chronos/domain && npm run build -w @chronos/api && npm run build -w @chronos/web",
     "test": "npm run test -w @chronos/domain && npm run test -w @chronos/api && .venv/bin/python -m unittest discover scheduler/tests",
     "typecheck": "tsc -b",
