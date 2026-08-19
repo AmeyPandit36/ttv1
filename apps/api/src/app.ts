@@ -1,4 +1,4 @@
-import express from 'express';import cors from 'cors';import helmet from 'helmet';import {rateLimit} from 'express-rate-limit';import {spawn} from 'node:child_process';import {fileURLToPath} from 'node:url';import {existsSync} from 'node:fs';import {randomUUID} from 'node:crypto';import XLSX from 'xlsx';
+import express from 'express';import cors from 'cors';import helmet from 'helmet';import {rateLimit} from 'express-rate-limit';import {spawn} from 'node:child_process';import {fileURLToPath} from 'node:url';import {existsSync} from 'node:fs';import {randomUUID} from 'node:crypto';import XLSX from 'xlsx';import PDFDocument from 'pdfkit';
 import {analyzeCandidates,PolicySchema,SolverInputSchema,validateTimetable,type SolverResult} from '@chronos/domain';
 import {collections,departments,faculty,resources,policies,runs,slots,solverInput,versions,buildSessions,type Entity} from './store.js';
 import {ready,persistEntity,persistEntities,persistPolicy,persistGeneration,persistMove,persistTransition,audit,logAIAction,persistFacultyAvailability,persistResourceAvailability,nextVersionNumber,db,withTransaction} from './db.js';
@@ -622,6 +622,94 @@ app.get('/api/timetables/versions/:id/export.xlsx', async (req, res, next) => {
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename=chronos-version-${v.version}.xlsx`);
     res.send(buf);
+  } catch (e) { next(e); }
+});
+
+app.get('/api/timetables/versions/:id/export.pdf', async (req, res, next) => {
+  try {
+    const v = versions.find(x => x.id === req.params.id);
+    if (!v) return res.status(404).json({error:{code:'NOT_FOUND',message:'Version not found'}});
+    
+    const user = currentUser(req);
+    const sessions = buildSessions();
+    let assignments = v.assignments;
+    
+    if (user.role === 'HOD') {
+      assignments = assignments.filter(a => {
+        const s = sessions.find(x => x.id === a.sessionId);
+        return s && s.preferredDepartmentId === user.departmentId;
+      });
+    } else if (user.role === 'FACULTY') {
+      const fac = faculty.find(f => (f as any).userId === user.id || f.id === user.id);
+      assignments = fac ? assignments.filter(a => {
+        const s = sessions.find(x => x.id === a.sessionId);
+        return s && s.facultyId === fac.id;
+      }) : [];
+    } else if (user.role === 'STUDENT') {
+      const enroll = collections.enrollments.find(e => (e as any).studentId === user.id || e.id === user.id || (e as any).studentName?.toLowerCase() === user.name?.toLowerCase());
+      assignments = enroll ? assignments.filter(a => {
+        const s = sessions.find(x => x.id === a.sessionId);
+        return s && isSessionForStudent(s, (enroll as any).divisionId, (enroll as any).batchId);
+      }) : [];
+    }
+
+    const doc = new PDFDocument({ layout: 'landscape', size: 'A4', margin: 30 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=chronos-version-${v.version}.pdf`);
+    doc.pipe(res);
+
+    doc.font('Helvetica-Bold').fontSize(18).text(`Campus Chronos Timetable - Version ${v.version}`, { align: 'center' });
+    doc.fontSize(10).font('Helvetica').text(`Status: ${v.status}  |  Generated on: ${new Date(v.createdAt).toLocaleDateString()}`, { align: 'center' });
+    doc.moveDown(2);
+
+    doc.font('Helvetica-Bold').fontSize(10);
+    const headers = ['Subject', 'Session Title', 'Faculty', 'Resource', 'Day', 'Period'];
+    const colWidths = [80, 150, 110, 110, 80, 80];
+    let startX = 30;
+    let startY = doc.y;
+
+    headers.forEach((h, idx) => {
+      doc.text(h, startX, startY);
+      startX += colWidths[idx];
+    });
+    
+    doc.moveTo(30, startY + 15).lineTo(30 + colWidths.reduce((a, b) => a + b, 0), startY + 15).stroke();
+    doc.moveDown(1.5);
+
+    doc.font('Helvetica').fontSize(9);
+    assignments.forEach(a => {
+      const s = sessions.find(x => x.id === a.sessionId)!;
+      const r = resources.find(x => x.id === a.resourceId)!;
+      const atomic = a.slotIds.map(id => slots.find(x => x.id === id)!).filter(Boolean);
+      
+      const rowY = doc.y;
+      if (rowY > 520) {
+        doc.addPage();
+        doc.font('Helvetica-Bold').fontSize(10);
+        let headerX = 30;
+        headers.forEach((h, idx) => {
+          doc.text(h, headerX, 30);
+          headerX += colWidths[idx];
+        });
+        doc.moveTo(30, 45).lineTo(30 + colWidths.reduce((a, b) => a + b, 0), 45).stroke();
+        doc.font('Helvetica').fontSize(9);
+        doc.y = 55;
+      }
+
+      let curX = 30;
+      doc.text(s.subjectCode, curX, doc.y); curX += colWidths[0];
+      doc.text(s.title.substring(0, 30), curX, doc.y); curX += colWidths[1];
+      
+      const teacherName = faculty.find(x => x.id === s.facultyId)?.name || s.facultyId;
+      doc.text(teacherName.substring(0, 20), curX, doc.y); curX += colWidths[2];
+      doc.text(r.name.substring(0, 20), curX, doc.y); curX += colWidths[3];
+      doc.text(atomic[0]?.label.split(' ')[0] || '', curX, doc.y); curX += colWidths[4];
+      doc.text(atomic[0]?.label.split(' ')[1] || '', curX, doc.y);
+      
+      doc.moveDown(1.2);
+    });
+
+    doc.end();
   } catch (e) { next(e); }
 });
 

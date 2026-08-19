@@ -28,10 +28,12 @@
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.3.14",
+    "@types/pdfkit": "^0.17.6",
     "bcryptjs": "^3.0.2",
     "express-rate-limit": "^8.6.2",
     "helmet": "^8.1.0",
     "jose": "^6.1.0",
+    "pdfkit": "^0.19.1",
     "xlsx": "^0.18.5"
   }
 }

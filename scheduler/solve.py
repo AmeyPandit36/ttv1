@@ -279,6 +279,36 @@ def solve(data):
             movements += sum(1 for i in range(1, len(events)) if events[i - 1][1] and events[i][1] and events[i - 1][1] != events[i][1])
     used_periods = sum(len(assignment['slotIds']) for assignment in assignments)
     available_periods = max(1, len(resources) * len([slot for slot in slots if not slot.get('isBreak')]))
+    
+    # Evaluate detailed per-policy / per-penalty breakdown of objective
+    dep_fallback_penalty = 0
+    cap_gap_penalty = 0
+    fac_preference_penalty = 0
+    policy_penalties = defaultdict(int)
+
+    for (session_id, index), variable in var.items():
+        if solver.value(variable):
+            option = candidates[session_id][index]
+            session = smap[session_id]
+            resource = resource_info[option['resourceId']]
+            ids = option['slotIds']
+
+            if resource.get('departmentId') != session.get('preferredDepartmentId'):
+                dep_fallback_penalty += 8
+
+            preferred = lower_set(session.get('preferredCapabilities', []))
+            cap_gap_penalty += len(preferred - lower_set(resource.get('capabilities', []))) * 2
+
+            member = faculty.get(session['facultyId'], {})
+            preferred_slots = member.get('preferredSlotIds') or []
+            if preferred_slots:
+                fac_preference_penalty += sum(2 for slot_id in ids if slot_id not in preferred_slots)
+
+            for policy in policies:
+                if policy.get('strength') == 'SOFT' and policy.get('type') == 'RESOURCE_PREFERENCE' and policy_applies(session, policy):
+                    if resource['id'] not in (policy.get('parameters') or {}).get('preferredResourceIds', []):
+                        policy_penalties[policy.get('id', 'unknown')] += int(policy.get('weight', 10))
+
     metrics = {
         'sessions': len(sessions),
         'scheduledSessions': len(assignments),
@@ -291,7 +321,13 @@ def solve(data):
         'facultyGaps': faculty_gaps,
         'studentGaps': student_gaps,
         'buildingMovements': movements,
-        'resourceUtilizationPercent': round(100 * used_periods / available_periods, 2)
+        'resourceUtilizationPercent': round(100 * used_periods / available_periods, 2),
+        'objectiveBreakdown': {
+            'departmentFallbackPenalty': dep_fallback_penalty,
+            'capabilityGapPenalty': cap_gap_penalty,
+            'facultySlotPreferencePenalty': fac_preference_penalty,
+            'policyPenalties': dict(policy_penalties)
+        }
     }
     return {'status': 'OPTIMAL' if status == cp_model.OPTIMAL else 'FEASIBLE', 'assignments': assignments, 'diagnostics': [], 'metrics': metrics}
 

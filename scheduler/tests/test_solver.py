@@ -180,6 +180,12 @@ class SolverTests(unittest.TestCase):
         self.assertIn(result['status'], ['OPTIMAL', 'FEASIBLE'])
         self.assertEqual(len(result['assignments']), len(sessions))
         self.assertGreater(result['metrics']['resourceUtilizationPercent'], 0)
+        self.assertIn('objectiveBreakdown', result['metrics'])
+        breakdown = result['metrics']['objectiveBreakdown']
+        self.assertIn('departmentFallbackPenalty', breakdown)
+        self.assertIn('capabilityGapPenalty', breakdown)
+        self.assertIn('facultySlotPreferencePenalty', breakdown)
+        self.assertIn('policyPenalties', breakdown)
 
 if __name__ == '__main__':
     unittest.main()

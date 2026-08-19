@@ -34,6 +34,24 @@ describe('Phase 3 P2 — Excel Export & Persistent AI Conversations', () => {
     expect(res.headers['content-disposition']).toContain('.xlsx');
   });
 
+  it('allows ADMIN to export a timetable version as a genuine .pdf file', async () => {
+    const adminToken = await makeToken({ id: 'user-admin', name: 'Demo Administrator', role: 'ADMIN' });
+    const authAdmin = { Authorization: `Bearer ${adminToken}` };
+
+    // 1. Generate version
+    const gen = await request(app).post('/api/generation/run').set(authAdmin).expect(201);
+    const verId = gen.body.version.id;
+
+    // 2. Export PDF
+    const res = await request(app)
+      .get(`/api/timetables/versions/${verId}/export.pdf`)
+      .set(authAdmin)
+      .expect(200);
+
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect(res.headers['content-disposition']).toContain('.pdf');
+  });
+
   it('supports persistent AI conversations and history retrieval', async () => {
     const adminToken = await makeToken({ id: 'user-admin', name: 'Demo Administrator', role: 'ADMIN' });
     const authAdmin = { Authorization: `Bearer ${adminToken}` };
