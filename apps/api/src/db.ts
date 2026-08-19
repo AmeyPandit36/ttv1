@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
 import { hash } from 'bcryptjs';
-import { departments, programs, levels, divisions, batches, enrollments, faculty, resources, subjects, requirements, policies, slots, versions, runs, buildSessions } from './store.js';
+import { departments, programs, levels, divisions, batches, enrollments, faculty, resources, subjects, requirements, policies, slots, versions, runs, buildSessions, academicYears, buildings, floors } from './store.js';
 import { validateTimetable } from '@chronos/domain';
 const isTest = process.env.NODE_ENV === 'test' || process.env.VITEST === 'true';
 const allowDemoSeed = isTest || process.env.CHRONOS_SEED_DEMO === '1';
@@ -113,8 +113,35 @@ async function insertRequirement(e) { await q(`INSERT INTO "TeachingRequirement"
         await q(`INSERT INTO "RequirementCapability" VALUES ($1,$2,true,5)`, [e.id, cap.rows[0].id]);
 } for (let i = 1; i <= Number(e.weeklyFrequency); i++)
     await q(`INSERT INTO "SchedulableSession"("id","requirementId","occurrence","durationPeriods","fingerprint") VALUES ($1,$2,$3,$4,$5)`, [`${e.id}-${i}`, e.id, i, e.duration, `${e.id}:${i}`]); }
-async function hydrate() {
+export async function hydrate() {
+    const activeProfileRes = await db.query(`SELECT "id" FROM "ScheduleProfile" WHERE "active"=true LIMIT 1`);
+    let activeProfileId = activeProfileRes.rows[0]?.id;
+    if (!activeProfileId) {
+      const anyProfileRes = await db.query(`SELECT "id" FROM "ScheduleProfile" LIMIT 1`);
+      activeProfileId = anyProfileRes.rows[0]?.id;
+    }
+    if (activeProfileId) {
+      const slotsRes = await db.query(`
+        SELECT ts."id", wd."id" "dayId", ts."index", ts."label", ts."startsAt" "start", ts."endsAt" "end", ts."isBreak"
+        FROM "TimeSlot" ts
+        JOIN "WorkingDay" wd ON wd."id" = ts."workingDayId"
+        WHERE wd."profileId" = $1 AND wd."enabled" = true
+        ORDER BY wd."ordinal", ts."index"
+      `, [activeProfileId]);
+      slots.splice(0, slots.length, ...slotsRes.rows.map(row => ({
+        id: row.id,
+        dayId: row.dayId,
+        index: Number(row.index),
+        label: row.label,
+        start: row.start,
+        end: row.end,
+        isBreak: Boolean(row.isBreak)
+      })));
+    }
     const replace = (a, b) => a.splice(0, a.length, ...b);
+    replace(academicYears, (await db.query(`SELECT "id","name","startsOn","endsOn","active" FROM "AcademicYear"`)).rows);
+    replace(buildings, (await db.query(`SELECT "id","code","name","active" FROM "Building"`)).rows);
+    replace(floors, (await db.query(`SELECT "id","name","ordinal","buildingId" FROM "Floor"`)).rows);
     replace(departments, (await db.query(`SELECT "id","code","name","active" FROM "Department"`)).rows);
     replace(programs, (await db.query(`SELECT "id","code","name","departmentId","academicYearId" FROM "Program"`)).rows);
     replace(levels, (await db.query(`SELECT "id","name","ordinal","programId" FROM "AcademicLevel"`)).rows);
@@ -145,7 +172,8 @@ async function hydrate() {
 }
 export const ready = (async () => { await migrate(); await seed(); if (!isTest)
     await hydrate(); })();
-export async function persistEntity(c, e) { if (c === 'departments')
+export async function persistEntity(c, e) { if (c === 'academicYears')
+    return q(`INSERT INTO "AcademicYear"("id","name","startsOn","endsOn","active") VALUES ($1,$2,$3,$4,$5)`, [e.id, e.name, new Date(e.startsOn), new Date(e.endsOn), e.active]); if (c === 'departments')
     return q(`INSERT INTO "Department"("id","code","name") VALUES ($1,$2,$3)`, [e.id, e.code, e.name]); if (c === 'programs')
     return q(`INSERT INTO "Program"("id","code","name","departmentId","academicYearId") VALUES ($1,$2,$3,$4,$5)`, [e.id, e.code, e.name, e.departmentId, e.academicYearId]); if (c === 'levels')
     return q(`INSERT INTO "AcademicLevel" VALUES ($1,$2,$3,$4)`, [e.id, e.name, e.ordinal, e.programId]); if (c === 'divisions')
@@ -168,20 +196,27 @@ export async function persistEntity(c, e) { if (c === 'departments')
     }
     return;
 } if (c === 'requirements')
-    return insertRequirement(e); throw new Error(`Persistent create unavailable for ${c}`); }
+    return insertRequirement(e); if (c === 'buildings')
+    return q(`INSERT INTO "Building"("id","code","name","active") VALUES ($1,$2,$3,$4)`, [e.id, e.code, e.name, e.active]); if (c === 'floors')
+    return q(`INSERT INTO "Floor"("id","name","ordinal","buildingId") VALUES ($1,$2,$3,$4)`, [e.id, e.name, e.ordinal, e.buildingId]); throw new Error(`Persistent create unavailable for ${c}`); }
 export async function persistEntities(collection, rows) {
     return withTransaction(async () => {
         for (const row of rows) await persistEntity(collection, row);
     });
 }
-export async function persistPolicy(p) { await q(`INSERT INTO "SchedulingPolicy"("id","name","description","ruleType","strength","priority","scope","parameters","active","version") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT ("id") DO UPDATE SET "name"=excluded."name","scope"=excluded."scope","parameters"=excluded."parameters","active"=excluded."active","version"=excluded."version"`, [p.id, p.name, p.description, p.type, p.strength, p.weight, JSON.stringify(p.scope), JSON.stringify(p.parameters), p.active, p.version]); }
-export async function nextVersionNumber() {
-    const result = await db.query(`SELECT COALESCE(max("version"),0)+1 n FROM "TimetableVersion" WHERE "timetableId"='timetable-26'`);
+export async function persistPolicy(p) { await q(`INSERT INTO "SchedulingPolicy"("id","name","description","ruleType","strength","priority","scope","parameters","active","version") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT ("id") DO UPDATE SET "name"=excluded."name","description"=excluded."description","ruleType"=excluded."ruleType","strength"=excluded."strength","priority"=excluded."priority","scope"=excluded."scope","parameters"=excluded."parameters","active"=excluded."active","version"=excluded."version"`, [p.id, p.name, p.description, p.type, p.strength, p.weight, JSON.stringify(p.scope), JSON.stringify(p.parameters), p.active, p.version]); }
+export async function allocateVersionNumber(timetableId: string) {
+    await q(`SELECT "id" FROM "Timetable" WHERE "id"=$1 FOR UPDATE`, [timetableId]);
+    const result = await db.query(`SELECT COALESCE(max("version"),0)+1 n FROM "TimetableVersion" WHERE "timetableId"=$1`, [timetableId]);
     return Number(result.rows[0]?.n ?? 1);
+}
+export async function nextVersionNumber() {
+    return allocateVersionNumber('timetable-26');
 }
 export async function persistGeneration(run: any, v: any = undefined) {
     return withTransaction(async () => {
         if (v) {
+            v.version = await allocateVersionNumber('timetable-26');
             await q(`INSERT INTO "TimetableVersion"("id","timetableId","version","status") VALUES ($1,'timetable-26',$2,$3)`, [v.id, v.version, v.status]);
             for (const a of v.assignments) {
                 const id = `entry-${v.id}-${a.sessionId}`;
@@ -192,7 +227,7 @@ export async function persistGeneration(run: any, v: any = undefined) {
             if (v.validation)
                 await q(`INSERT INTO "ValidationResult"("id","versionId","valid","metrics") VALUES ($1,$2,$3,$4)`, [`validation-${v.id}`, v.id, v.validation.valid, JSON.stringify(v.validation.metrics)]);
         }
-        await q(`INSERT INTO "GenerationRun"("id","versionId","status","sessionCount","candidateCount","solverStatus","solverDurationMs","objectiveMetrics","diagnostics","startedAt","completedAt") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [run.id, v?.id ?? null, run.status === 'INFEASIBLE' ? 'INFEASIBLE' : run.status === 'FAILED' ? 'FAILED' : 'SUCCEEDED', Number(run.result?.metrics?.sessions ?? 0), Number(run.result?.metrics?.candidates ?? 0), run.result?.status ?? null, Number(run.result?.metrics?.solverDurationMs ?? 0), JSON.stringify(run.result?.metrics ?? {}), JSON.stringify(run.result?.diagnostics ?? []), run.startedAt, run.completedAt]);
+        await q(`INSERT INTO "GenerationRun"("id","versionId","status","scope","sessionCount","candidateCount","solverStatus","solverDurationMs","objectiveMetrics","diagnostics","startedAt","completedAt") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, [run.id, v?.id ?? null, run.status === 'INFEASIBLE' ? 'INFEASIBLE' : run.status === 'FAILED' ? 'FAILED' : 'SUCCEEDED', JSON.stringify(run.scope || {}), Number(run.result?.metrics?.sessions ?? 0), Number(run.result?.metrics?.candidates ?? 0), run.result?.status ?? null, Number(run.result?.metrics?.solverDurationMs ?? 0), JSON.stringify(run.result?.metrics ?? {}), JSON.stringify(run.result?.diagnostics ?? []), run.startedAt, run.completedAt]);
     });
 }
 export async function assertVersionMutable(id) {
