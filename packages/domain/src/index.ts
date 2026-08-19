@@ -60,6 +60,7 @@ export const SessionSchema = z.object({
   preferredDepartmentId: Id.optional(),
   subjectId: Id.optional(),
   requiredResourceId: Id.optional(),
+  requiredSlotIds: z.array(Id).optional(),
   minCapacity: z.number().int().positive().optional()
 });
 
@@ -235,23 +236,66 @@ export function validateTimetable(input: SolverInput, assignments: Assignment[])
     }
   }
 
-  for (let i = 0; i < assignments.length; i++) {
-    for (let j = i + 1; j < assignments.length; j++) {
-      const left = assignments[i];
-      const right = assignments[j];
-      const overlap = left.slotIds.filter(id => right.slotIds.includes(id));
-      if (!overlap.length) continue;
-      const first = sessionMap.get(left.sessionId);
-      const second = sessionMap.get(right.sessionId);
-      if (!first || !second) continue;
-      if (left.resourceId === right.resourceId) {
-        conflicts.push({code: 'RESOURCE_COLLISION', message: 'Resource is double-booked', sessionIds: [first.id, second.id], slotIds: overlap, resourceId: left.resourceId});
+  // Optimized collision validation using slot maps: O(N) complexity
+  const resourceSlotMap = new Map<string, string>(); // (resourceId + slotId) -> sessionId
+  const facultySlotMap = new Map<string, string>(); // (facultyId + slotId) -> sessionId
+  const cohortSlotMap = new Map<string, string>(); // (cohortAtomId + slotId) -> sessionId
+
+  for (const a of assignments) {
+    const s = sessionMap.get(a.sessionId);
+    if (!s) continue;
+    
+    for (const slotId of a.slotIds) {
+      // 1. Resource collision
+      const rKey = `${a.resourceId}::${slotId}`;
+      if (resourceSlotMap.has(rKey)) {
+        const otherId = resourceSlotMap.get(rKey)!;
+        if (otherId !== a.sessionId) {
+          conflicts.push({
+            code: 'RESOURCE_COLLISION',
+            message: 'Resource is double-booked',
+            sessionIds: [otherId, a.sessionId],
+            slotIds: [slotId],
+            resourceId: a.resourceId
+          });
+        }
+      } else {
+        resourceSlotMap.set(rKey, a.sessionId);
       }
-      if (first.facultyId === second.facultyId) {
-        conflicts.push({code: 'FACULTY_COLLISION', message: 'Faculty is double-booked', sessionIds: [first.id, second.id], slotIds: overlap, facultyId: first.facultyId});
+
+      // 2. Faculty collision
+      const fKey = `${s.facultyId}::${slotId}`;
+      if (facultySlotMap.has(fKey)) {
+        const otherId = facultySlotMap.get(fKey)!;
+        if (otherId !== a.sessionId) {
+          conflicts.push({
+            code: 'FACULTY_COLLISION',
+            message: 'Faculty is double-booked',
+            sessionIds: [otherId, a.sessionId],
+            slotIds: [slotId],
+            facultyId: s.facultyId
+          });
+        }
+      } else {
+        facultySlotMap.set(fKey, a.sessionId);
       }
-      if (first.cohortAtomIds.some(atom => second.cohortAtomIds.includes(atom))) {
-        conflicts.push({code: 'COHORT_COLLISION', message: 'Participating student cohort is double-booked', sessionIds: [first.id, second.id], slotIds: overlap});
+
+      // 3. Cohort collision
+      for (const atom of s.cohortAtomIds) {
+        const cKey = `${atom}::${slotId}`;
+        if (cohortSlotMap.has(cKey)) {
+          const otherId = cohortSlotMap.get(cKey)!;
+          if (otherId !== a.sessionId) {
+            conflicts.push({
+              code: 'COHORT_COLLISION',
+              message: 'Participating student cohort is double-booked',
+              sessionIds: [otherId, a.sessionId],
+              slotIds: [slotId]
+            });
+          }
+        } else {
+          cohortSlotMap.set(cKey, a.sessionId);
+        }
       }
     }
   }

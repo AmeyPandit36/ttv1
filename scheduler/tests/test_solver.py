@@ -93,5 +93,93 @@ class SolverTests(unittest.TestCase):
         self.assertIn(result['status'], ['OPTIMAL', 'FEASIBLE'])
         self.assertEqual(result['assignments'][0]['resourceId'], 'preferred')
 
+    def test_large_scale_benchmark(self):
+        """P3: Large scale college benchmark test."""
+        import random
+        slots = []
+        days = ['mon', 'tue', 'wed', 'thu', 'fri']
+        for day in days:
+            for idx in range(6):
+                slots.append({
+                    'id': f'{day}-{idx+1}',
+                    'dayId': day,
+                    'index': idx,
+                    'label': f'{day.capitalize()} P{idx+1}',
+                    'start': f'{9+idx:02d}:00',
+                    'end': f'{10+idx:02d}:00',
+                    'isBreak': idx == 3 # Period 4 is lunch break
+                })
+
+        resources = []
+        for i in range(1, 11):
+            resources.append({
+                'id': f'room-{i}',
+                'name': f'Classroom {100+i}',
+                'type': 'CLASSROOM',
+                'capacity': 60 if i % 2 == 0 else 40,
+                'active': True,
+                'capabilities': ['Projector'] if i % 3 == 0 else [],
+                'unavailableSlotIds': []
+            })
+
+        faculty_list = []
+        for i in range(1, 16):
+            faculty_list.append({
+                'id': f'fac-{i}',
+                'name': f'Professor {i}',
+                'departmentId': f'dept-{i % 3}',
+                'maxPeriodsPerWeek': 18,
+                'maxConsecutive': 3,
+                'unavailableSlotIds': ['mon-1'] if i % 5 == 0 else [],
+                'preferredSlotIds': [],
+                'eligibleSubjectIds': [f'sub-{i}', f'sub-{i+1}']
+            })
+
+        sessions = []
+        for i in range(1, 31):
+            fac_id = f'fac-{(i % 15) + 1}'
+            sessions.append({
+                'id': f'session-{i}',
+                'requirementId': f'req-{i}',
+                'subjectCode': f'CS{100+i}',
+                'title': f'Course {i} Lecture',
+                'facultyId': fac_id,
+                'cohortAtomIds': [f'cohort-{(i % 5) + 1}'],
+                'participantCount': 30,
+                'duration': 1,
+                'sessionType': 'LECTURE',
+                'resourceType': 'CLASSROOM',
+                'requiredCapabilities': [],
+                'preferredCapabilities': [],
+                'preferredDepartmentId': f'dept-{(i % 3)}',
+                'subjectId': f'sub-{(i % 15) + 1}'
+            })
+
+        data = {
+            'slots': slots,
+            'resources': resources,
+            'faculty': faculty_list,
+            'sessions': sessions,
+            'policies': [{
+                'id': 'pref-it',
+                'name': 'Prefer department rooms',
+                'type': 'RESOURCE_PREFERENCE',
+                'strength': 'SOFT',
+                'weight': 8,
+                'scope': {},
+                'parameters': {'preferredResourceIds': ['room-1', 'room-2']},
+                'active': True
+            }],
+            'timeLimitSeconds': 5
+        }
+
+        import json
+        result = solve(data)
+        if result['status'] == 'INFEASIBLE':
+            print("INFEASIBLE DIAGS:", json.dumps(result['diagnostics'], indent=2))
+        self.assertIn(result['status'], ['OPTIMAL', 'FEASIBLE'])
+        self.assertEqual(len(result['assignments']), len(sessions))
+        self.assertGreater(result['metrics']['resourceUtilizationPercent'], 0)
+
 if __name__ == '__main__':
     unittest.main()

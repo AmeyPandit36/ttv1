@@ -101,10 +101,12 @@ def solve(data):
                     continue
                 for block in time_blocks:
                     ids = [item['id'] for item in block]
-                    if set(ids) & set(member.get('unavailableSlotIds', [])):
+                    if session.get('requiredSlotIds') and set(ids) != set(session['requiredSlotIds']):
+                        continue
+                    if set(ids) & set(member.get('unavailableSlotIds', [])) and not session.get('requiredSlotIds'):
                         reasons['faculty unavailable'] += 1
                         continue
-                    if set(ids) & set(resource.get('unavailableSlotIds', [])):
+                    if set(ids) & set(resource.get('unavailableSlotIds', [])) and not session.get('requiredSlotIds'):
                         reasons['resource unavailable'] += 1
                         continue
                     prohibited = False
