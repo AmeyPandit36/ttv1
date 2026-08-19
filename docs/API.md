@@ -27,3 +27,18 @@ Errors have `{ error: { code, message, ...details } }`. Generation infeasibility
 Input: `slots`, `resources`, `faculty`, expanded `sessions`, active `policies`, `timeLimitSeconds`.
 
 Output: `status`, `assignments[]`, `diagnostics[]`, and `metrics` (session count, candidate count, objective, solver duration and preferred-resource assignments). The process has no credentials and no database access.
+
+## Additional operational endpoints
+
+| Method | Route | Purpose |
+|---|---|---|
+| POST | `/api/auth/login` | Verify bcrypt credentials and issue an eight-hour HS256 JWT |
+| PUT | `/api/faculty/:id/availability` | Persist hard blackouts and preferred periods |
+| PUT | `/api/resources/:id/availability` | Persist resource blackouts |
+| POST | `/api/import/preview` | Parse CSV/JSON, validate schema and duplicates without writes |
+| POST | `/api/import/:token/confirm` | Commit exactly the previously validated import |
+| GET | `/api/timetables/versions/:id/export.csv` | Export the canonical timetable data |
+
+Local credentials are `admin@chronos.local` / `Chronos123!`. Production refuses to start without `JWT_SECRET`. Authentication and high-impact generation/AI endpoints are rate-limited; Helmet security headers and configurable CORS are enabled.
+
+When `LLM_API_KEY`, `LLM_MODEL`, and optional `LLM_BASE_URL` are configured, policy interpretation uses an OpenAI-compatible strict JSON-schema response. Entity IDs are checked again server-side. Without provider configuration, the safe deterministic interpreter remains available.

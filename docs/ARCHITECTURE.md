@@ -43,7 +43,7 @@ The TypeScript validator does not inspect solver internals. From persisted assig
 - Scheduling: snapshots, runs, sessions, versions, entries, validation and conflicts.
 - AI: conversations, messages, proposed actions, confirmations and tool logs.
 
-Production code should replace the demo in-memory repository behind the API with Prisma transactions; domain and scheduler interfaces do not change.
+The API persists through a PostgreSQL-compatible repository. Local mode runs durable PGlite with the checked-in SQL migration; production uses PostgreSQL. Repository methods preserve the same domain and scheduler interfaces.
 
 ## AI tool contract and safety
 

@@ -8,7 +8,7 @@ Intelligent, constraint-safe college timetable generation and policy management.
 
 - React 19, TypeScript, Vite, responsive custom administrative design
 - Node 22, Express 5, Zod contracts
-- PostgreSQL 14+, Prisma schema and SQL migration
+- PostgreSQL-compatible PGlite runtime, PostgreSQL 14+ production migration, Prisma schema
 - Python 3.11, Google OR-Tools CP-SAT
 - Vitest, Supertest and Python unittest
 
@@ -16,7 +16,7 @@ See [architecture](docs/ARCHITECTURE.md) and [API contract](docs/API.md).
 
 ## Run locally
 
-Prerequisites: Node 22+, Python 3.11+, and (for persistent production mode) PostgreSQL 14+.
+Prerequisites: Node 22+ and Python 3.11+. The local application embeds a durable PostgreSQL-compatible PGlite database under `data/`; production can use PostgreSQL 14+.
 
 ```bash
 npm install
@@ -25,7 +25,7 @@ python3 -m venv .venv
 npm run dev
 ```
 
-Open `http://localhost:5173`. The API listens on `0.0.0.0:4000`; Vite serves on `0.0.0.0:5173` and proxies browser `/api` calls. The included realistic in-memory demo repository means the integrated workflow runs without infrastructure: 2026–27, IT/CSE departments, Third Year A/B, batches A1/A2, faculty availability/workloads, classroom/labs/capabilities, lectures/practicals and a department-resource policy.
+Open `http://localhost:5173` and sign in with `admin@chronos.local` / `Chronos123!`. The API listens on `0.0.0.0:4000`; Vite serves on `0.0.0.0:5173` and proxies browser `/api` calls. The included durable embedded database is migrated and seeded automatically, so the integrated workflow runs without external infrastructure: 2026–27, IT/CSE departments, Third Year A/B, batches A1/A2, faculty availability/workloads, classroom/labs/capabilities, lectures/practicals and a department-resource policy.
 
 To provision PostgreSQL for the persistence model:
 
@@ -36,12 +36,12 @@ npm run db:migrate
 npm run db:generate
 ```
 
-The checked-in `prisma/migrations/20260819000000_initial/migration.sql` creates the fresh schema. The present demo API repository is intentionally infrastructure-free; wiring it to generated Prisma repositories is listed under limitations.
+The checked-in `prisma/migrations/20260819000000_initial/migration.sql` creates the fresh schema. The same checked-in migration is executed by the embedded runtime (with the UUID extension default omitted because IDs are application-generated).
 
 ## Verify
 
 ```bash
-npm test       # domain + API/real scheduler + Python solver tests
+npm test       # 19 domain + API/real scheduler + Python solver tests
 npm run build  # domain, API and production web bundle
 npm audit --omit=dev
 ```
@@ -58,25 +58,26 @@ npm audit --omit=dev
 - Version lifecycle and immutable published versions.
 - Entity-grounded, confirmation-based policy assistant and evidence-grounded assignment explanations.
 - Professional dashboard, setup lists, generation workflow, versioned/filterable timetable grid and AI conversation UI.
-- Role boundary for ADMIN, HOD, FACULTY and STUDENT development identities.
+- Bcrypt/JWT authentication, ADMIN/HOD mutation authorization, audit writes, security headers and rate limits.
+- Durable embedded PostgreSQL-compatible persistence with restart hydration.
+- Validated CSV import preview/confirmation and canonical timetable CSV export.
+- Faculty/resource availability editors, student enrollment, setup forms, manual move UI and lifecycle review/publish controls.
 
 ## Known limitations
 
-This repository is a production-oriented vertical slice, not the entire multi-year product backlog in the master brief:
-
-- The running demo uses an in-memory repository; process restarts reset data. The complete PostgreSQL schema/migration exists, but API repositories and transactional persistence are not yet wired to Prisma.
-- Setup screens currently provide connected list views; the “Add” buttons are visual while typed create endpoints exist. Full forms, update/delete, availability editors and enrollment import are pending.
-- Manual move validation exists in the API, but drag-and-drop UI is pending.
-- The policy assistant currently uses a deterministic safe interpreter for resource preference/prohibition. The controlled tool boundary is ready, but an external provider adapter, broader typed rule catalog and durable conversations are pending.
-- Authentication uses explicit development bearer identities, not password/OIDC sessions. Production deployment must add OIDC/password hashing, CSRF/rate limiting, persistent audit writes and department-row scoping.
-- CSV/Excel import, PDF/Excel export, background job queue/progress streaming, copy-on-write version UI, Testcontainers repository tests and Playwright tests are not yet included.
-- Infeasible global collision diagnostics are grounded at aggregate level; minimal unsatisfiable cores and relaxation ranking are a recommended enhancement.
+- Local mode uses embedded PGlite rather than a network PostgreSQL service. The checked-in migration is PostgreSQL-compatible, but deployment automation for a managed PostgreSQL instance is not included.
+- Availability and time-profile data are enforced and persisted, while dedicated visual calendar editors for every availability record remain basic.
+- The policy assistant supports resource preference/prohibition through a deterministic fallback and an optional OpenAI-compatible structured-output provider. Additional policy plug-ins can be added without changing the tool boundary.
+- CSV import and CSV timetable export are implemented; Excel and PDF renderers are not included.
+- Authentication uses signed eight-hour JWTs with bcrypt password hashes. Production deployment should connect institutional OIDC, rotate `JWT_SECRET`, and add refresh/session revocation.
+- Generation runs execute synchronously. Large institutions should move solving to a durable job worker with streamed progress.
+- Browser-level Playwright coverage is not included; domain, real solver and HTTP integration workflows are automated.
 
 ## Recommended next work
 
-1. Implement Prisma repositories and transactions, then PostgreSQL/Testcontainers integration tests.
-2. Add typed CRUD forms and availability/time-profile editors with optimistic concurrency.
-3. Move generation to a durable worker and persist immutable input snapshots/fingerprints.
-4. Add policy-rule plugins and a provider-agnostic LLM adapter with tool-call transcripts.
-5. Add drag/drop version cloning, scope views, import previews and exports.
-6. Add OIDC/RBAC department filters, security headers, rate limits and end-to-end Playwright coverage.
+1. Add Testcontainers coverage against network PostgreSQL and transactional optimistic concurrency.
+2. Expand visual availability/time-profile and enrollment editors.
+3. Move generation to a durable worker and stream progress.
+4. Add more typed policy plug-ins and multi-turn provider conversations.
+5. Add Excel/PDF exports and drag-and-drop interactions.
+6. Integrate institutional OIDC and browser-level Playwright coverage.
