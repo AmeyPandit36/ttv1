@@ -111,7 +111,25 @@ def solve(data):
     for (sid,i),v in var.items():
         if solver.value(v):
             o=candidates[sid][i]; assignments.append({'sessionId':sid,'resourceId':o['resourceId'],'slotIds':o['slotIds'],'score':-o['penalty']})
-    return {'status':'OPTIMAL' if status==cp_model.OPTIMAL else 'FEASIBLE','assignments':assignments,'diagnostics':[],'metrics':{'sessions':len(sessions),'candidates':sum(map(len,candidates.values())),'objective':solver.objective_value,'solverDurationMs':round((time.monotonic()-started)*1000),'preferredResourceAssignments':sum(1 for a in assignments if next(r for r in resources if r['id']==a['resourceId']).get('departmentId')==smap[a['sessionId']].get('preferredDepartmentId'))}}
+    slot_info={x['id']:x for x in slots}; resource_info={x['id']:x for x in resources}
+    def gap_count(key_values):
+        occupied=defaultdict(set)
+        for a in assignments:
+            for key in key_values(smap[a['sessionId']]):
+                for sid in a['slotIds']: occupied[(key,slot_info[sid]['dayId'])].add(slot_info[sid]['index'])
+        return sum((max(v)-min(v)+1-len(v)) for v in occupied.values() if v)
+    faculty_gaps=gap_count(lambda session:[session['facultyId']]); student_gaps=gap_count(lambda session:session['cohortAtomIds'])
+    movements=0
+    for cohort in {x for session in sessions for x in session['cohortAtomIds']}:
+        daily=defaultdict(list)
+        for a in assignments:
+            if cohort in smap[a['sessionId']]['cohortAtomIds']:
+                first=slot_info[a['slotIds'][0]];daily[first['dayId']].append((first['index'],resource_info[a['resourceId']].get('buildingId')))
+        for events in daily.values():
+            events.sort();movements+=sum(1 for i in range(1,len(events)) if events[i-1][1] and events[i][1] and events[i-1][1]!=events[i][1])
+    used_periods=sum(len(a['slotIds']) for a in assignments);available_periods=max(1,len(resources)*len([x for x in slots if not x.get('isBreak')]))
+    metrics={'sessions':len(sessions),'scheduledSessions':len(assignments),'unscheduledSessions':0,'candidates':sum(map(len,candidates.values())),'objective':solver.objective_value,'solverDurationMs':round((time.monotonic()-started)*1000),'preferredResourceAssignments':sum(1 for a in assignments if resource_info[a['resourceId']].get('departmentId')==smap[a['sessionId']].get('preferredDepartmentId')),'fallbackResourceAssignments':sum(1 for a in assignments if resource_info[a['resourceId']].get('departmentId')!=smap[a['sessionId']].get('preferredDepartmentId')),'facultyGaps':faculty_gaps,'studentGaps':student_gaps,'buildingMovements':movements,'resourceUtilizationPercent':round(100*used_periods/available_periods,2)}
+    return {'status':'OPTIMAL' if status==cp_model.OPTIMAL else 'FEASIBLE','assignments':assignments,'diagnostics':[],'metrics':metrics}
 
 def main():
     try: print(json.dumps(solve(json.load(sys.stdin))))
