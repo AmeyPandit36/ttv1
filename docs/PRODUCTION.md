@@ -1,59 +1,96 @@
 # Production readiness & deployment guide
 
-This document provides instructions for deploying, validating, and maintaining the **Campus Chronos** college timetable platform in a production-grade environment.
+This document provides instructions for deploying, validating, and maintaining **Campus Chronos** in a production-grade environment.
 
 ---
 
 ## 1. Environment requirements
 
-*   **Node.js**: v18.0.0 or higher (Active LTS recommended)
-*   **Python**: v3.11.x (with `ortools` and standard scheduler requirements)
-*   **Database**: PostgreSQL v14.0 or higher
-*   **Memory**: Minimum 2 GB RAM (for running CP-SAT optimization)
+- **Node.js**: v22.x recommended (the repository CI workflow uses Node 22)
+- **Python**: v3.11.x with `scheduler/requirements.txt` installed
+- **Database**: PostgreSQL v14.0 or higher
+- **Memory**: Minimum 2 GB RAM for CP-SAT optimization; larger institutions may need more
 
 ---
 
 ## 2. Secrets configuration
 
-All production credentials and keys must be injected via secure system environment variables. Never hard-code credentials in source code.
+All production credentials and keys must be injected via secure environment variables. Never hard-code credentials in source code.
 
 | Variable | Description | Example |
 |---|---|---|
 | `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@host:5432/db?schema=public` |
-| `JWT_SECRET` | HS256 key used to sign session tokens | `9a7f34c2b8c9d0e1...` (Use 256+ bit strong random key) |
-| `NODE_ENV` | Mode of operation (`production` or `development`) | `production` |
-| `APP_ORIGIN` | Allowed CORS origins (comma-separated list) | `https://chronos.yourcollege.edu` |
+| `JWT_SECRET` | HS256 key used to sign session tokens | Strong 256+ bit random secret |
+| `NODE_ENV` | Mode of operation | `production` |
+| `APP_ORIGIN` | Allowed CORS origins, comma-separated | `https://chronos.yourcollege.edu` |
 | `PORT` | HTTP port for the API server | `4000` |
+| `SCHEDULER_PYTHON` | Optional explicit Python executable for the solver | `/opt/chronos/.venv/bin/python` |
 
 ---
 
-## 3. Database migrations
+## 3. Install and build
 
-We use **Prisma** to apply database migrations to Managed PostgreSQL.
-
-### Applying migrations:
 ```bash
-# Install Node dependencies
-npm install
-
-# Run migration deployment (runs checked-in SQL files sequentially)
-npx prisma migrate deploy
+npm ci
+python3 -m venv .venv
+.venv/bin/pip install -r scheduler/requirements.txt
+npm run build
 ```
 
-Our migrations include critical database-level hardening triggers (`chronos_timetable_version_immutable`, `chronos_timetable_entry_immutable`, and `chronos_timetable_entry_slot_immutable`) that block any insertions, updates, or deletions of timetable entries once their corresponding `TimetableVersion` is marked as `PUBLISHED`.
+The production build compiles the domain package, API, and web bundle.
 
 ---
 
-## 4. Environment & health validation
+## 4. Database migrations
 
-The API server provides a dedicated health check endpoint at `/api/health`.
+Use **Prisma** to apply checked-in migrations to managed PostgreSQL:
 
-### Verification command:
+```bash
+cp .env.example .env
+# edit .env and set DATABASE_URL
+npm run db:migrate
+npm run db:generate
+```
+
+The migrations include database-level hardening triggers (`chronos_timetable_version_immutable`, `chronos_timetable_entry_immutable`, and `chronos_timetable_entry_slot_immutable`) that block insertions, updates, or deletions of timetable entries once their corresponding `TimetableVersion` is marked as `PUBLISHED`.
+
+After migrations, run the PostgreSQL verification script against a disposable database or schema-compatible test database:
+
+```bash
+DATABASE_URL=postgresql://user:pass@host:5432/chronos_verify npm run verify:postgres
+```
+
+This script creates an isolated temporary schema, applies checked-in migrations, verifies critical tables/triggers, exercises published-version immutability, verifies rollback behavior, and checks lock-based version allocation. It requires a real PostgreSQL service; it is not a PGlite substitute.
+
+---
+
+## 5. CI workflow source
+
+The repository includes `.github/workflows/ci.yml`. It is intended to run on pushes to `main` and `arena/**` branches and on pull requests to `main`. The workflow:
+
+1. Installs Node dependencies with `npm ci`.
+2. Creates a Python 3.11 virtual environment and installs solver requirements.
+3. Builds `@chronos/domain` before workspace consumers run tests.
+4. Runs Node/domain/API tests.
+5. Runs Python solver tests.
+6. Starts a PostgreSQL service and runs `npm run verify:postgres`.
+7. Builds production bundles.
+8. Runs `npm audit --omit=dev`.
+
+Remote execution depends on GitHub Actions being enabled and the pushing credential having permission to create/update workflow files.
+
+---
+
+## 6. Environment and health validation
+
+The API server provides a health check endpoint at `/api/health`.
+
 ```bash
 curl -f http://localhost:4000/api/health
 ```
 
-### Healthy response (Status 200):
+Healthy response:
+
 ```json
 {
   "status": "ok",
@@ -64,17 +101,24 @@ curl -f http://localhost:4000/api/health
 
 ---
 
-## 5. Secret rotation guidance
+## 7. Runtime notes
 
-To maintain high operational security, rotate your `JWT_SECRET` periodically (e.g., every 90 days) or immediately upon suspicion of compromise.
+- Default generation remains synchronous. `POST /api/generation/run?async=true` starts an in-process asynchronous solve and returns `202 Accepted`, but it is not a durable external queue.
+- Binary XLSX export is generated by an in-repository OpenXML writer; the vulnerable `xlsx` npm package is intentionally not used.
+- PDF export uses PDFKit.
+- Playwright browser tests require installed browser binaries and are not part of the production runtime.
 
-### Rotation procedure:
-1.  **Generate a new 512-bit secure secret key**:
-    ```bash
-    openssl rand -base64 48
-    ```
-2.  **Deploy the new key as a secondary key or update the environment**:
-    *   Update the `JWT_SECRET` environment variable in your production environment config (e.g., AWS ECS, Kubernetes Secrets, or Heroku Config).
-3.  **Perform a rolling restart of the API container instances**:
-    *   This forces all servers to pick up the new secret.
-    *   *Note*: Rotating the JWT secret will invalidate existing active client sessions, requiring users to log in again. Schedule rotation during off-peak hours (e.g., midnight) to prevent operational disruption.
+---
+
+## 8. Secret rotation guidance
+
+Rotate `JWT_SECRET` periodically (for example, every 90 days) or immediately on suspected compromise.
+
+1. Generate a strong secret:
+   ```bash
+   openssl rand -base64 48
+   ```
+2. Update the secret in the production environment or secret manager.
+3. Perform a rolling restart of API instances.
+
+Rotating `JWT_SECRET` invalidates active client sessions. Schedule rotation during a maintenance window if that disruption matters.

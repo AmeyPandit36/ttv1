@@ -6,6 +6,13 @@ import {db} from './db.js';
 
 const secret = new TextEncoder().encode(process.env.JWT_SECRET ?? 'development-only-change-me-before-production');
 
+function binaryParser(res: any, callback: (error: Error | null, body?: Buffer) => void) {
+  const chunks: Buffer[] = [];
+  res.on('data', (chunk: Buffer | string) => chunks.push(Buffer.from(chunk)));
+  res.on('end', () => callback(null, Buffer.concat(chunks)));
+  res.on('error', callback);
+}
+
 async function makeToken(user: { id: string; name: string; role: string; departmentId?: string }) {
   return await new SignJWT({ name: user.name, role: user.role, departmentId: user.departmentId })
     .setProtectedHeader({ alg: 'HS256' })
@@ -28,10 +35,16 @@ describe('Phase 3 P2 — Excel Export & Persistent AI Conversations', () => {
     const res = await request(app)
       .get(`/api/timetables/versions/${verId}/export.xlsx`)
       .set(authAdmin)
+      .buffer(true)
+      .parse(binaryParser)
       .expect(200);
 
     expect(res.headers['content-type']).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     expect(res.headers['content-disposition']).toContain('.xlsx');
+    expect(Buffer.isBuffer(res.body)).toBe(true);
+    expect(res.body.subarray(0, 2).toString('utf8')).toBe('PK');
+    expect(res.body.includes(Buffer.from('xl/workbook.xml'))).toBe(true);
+    expect(res.body.includes(Buffer.from('xl/worksheets/sheet1.xml'))).toBe(true);
   });
 
   it('allows ADMIN to export a timetable version as a genuine .pdf file', async () => {

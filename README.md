@@ -1,18 +1,19 @@
 # Campus Chronos
 
-Intelligent, constraint-safe college timetable generation and policy management. The LLM-facing assistant interprets policies; a deterministic Google OR-Tools CP-SAT engine creates assignments; an independent TypeScript validator verifies the result.
+Intelligent, constraint-safe college timetable generation and policy management. The assistant interprets grounded scheduling policies; a deterministic Google OR-Tools CP-SAT engine creates assignments; an independent TypeScript validator verifies the result.
 
 ![Architecture](https://img.shields.io/badge/solver-OR--Tools%20CP--SAT-6755d9) ![TypeScript](https://img.shields.io/badge/API-TypeScript-3178c6) ![Database](https://img.shields.io/badge/database-PostgreSQL-336791)
 
 ## Stack
 
-- React 19, TypeScript, Vite, responsive custom administrative design
+- React 19, TypeScript, Vite, responsive administrative UI
 - Node 22, Express 5, Zod contracts
-- PostgreSQL-compatible PGlite runtime, PostgreSQL 14+ production migration, Prisma schema
+- PostgreSQL-compatible PGlite local runtime, PostgreSQL 14+ production migration, Prisma schema
 - Python 3.11, Google OR-Tools CP-SAT
-- Vitest, Supertest and Python unittest
+- Vitest, Supertest, Python unittest, and Playwright E2E source/configuration
+- PDFKit plus an in-repository minimal XLSX writer for binary timetable exports
 
-See [architecture](docs/ARCHITECTURE.md) and [API contract](docs/API.md).
+See [architecture](docs/ARCHITECTURE.md), [API contract](docs/API.md), [Phase 3 report](docs/PHASE_3_REPORT.md), and [production guide](docs/PRODUCTION.md).
 
 ## Run locally
 
@@ -25,9 +26,9 @@ python3 -m venv .venv
 CHRONOS_SEED_DEMO=1 npm run dev
 ```
 
-Open `http://localhost:5173` and sign in with `admin@chronos.local` / `Chronos123!`. The API listens on `0.0.0.0:4000`; Vite serves on `0.0.0.0:5173` and proxies browser `/api` calls. The included durable embedded database is migrated and seeded automatically, so the integrated workflow runs without external infrastructure: 2026–27, IT/CSE departments, Third Year A/B, batches A1/A2, faculty availability/workloads, classroom/labs/capabilities, lectures/practicals and a department-resource policy.
+Open `http://localhost:5173` and sign in with `admin@chronos.local` / `Chronos123!`. The API listens on `0.0.0.0:4000`; Vite serves on `0.0.0.0:5173` and proxies browser `/api` calls. With `CHRONOS_SEED_DEMO=1`, the embedded database is migrated and seeded automatically with academic year 2026–27, IT/CSE departments, divisions, batches, faculty, resources, availability/workload data, teaching requirements, and sample policies.
 
-To provision PostgreSQL for the persistence model:
+To provision PostgreSQL for the production persistence model:
 
 ```bash
 cp .env.example .env
@@ -36,49 +37,74 @@ npm run db:migrate
 npm run db:generate
 ```
 
-The checked-in `prisma/migrations/20260819000000_initial/migration.sql` creates the fresh schema. The same checked-in migration is executed by the embedded runtime (with the UUID extension default omitted because IDs are application-generated).
+The checked-in `prisma/migrations/20260819000000_initial/migration.sql` creates the fresh schema. The embedded runtime applies equivalent SQL locally, with UUID defaults handled by application-generated IDs.
 
 ## Verify
 
+Install Node and Python dependencies first:
+
 ```bash
-npm test       # 19 domain + API/real scheduler + Python solver tests
-npm run build  # domain, API and production web bundle
-npm audit --omit=dev
+npm ci
+python3 -m venv .venv
+.venv/bin/pip install -r scheduler/requirements.txt
 ```
+
+Then run:
+
+```bash
+npm test              # builds @chronos/domain, then runs domain/API/Python tests
+npm run build         # domain, API, and production web bundle
+npm audit --omit=dev  # production dependency audit
+```
+
+Optional environment-dependent checks:
+
+```bash
+DATABASE_URL=postgresql://user:pass@localhost:5432/db npm run verify:postgres
+npx playwright test
+```
+
+`verify:postgres` requires a real PostgreSQL 14+ database. Playwright requires installed browser binaries (`npx playwright install` or a CI image/cache that already contains them).
 
 ## Implemented product slice
 
-- Normalized college schema: academic hierarchy, student enrollment/cohorts, faculty, infrastructure/capabilities, time, teaching, policies, scheduling/versioning, validation/conflicts, AI and auditing.
+- Normalized college schema: academic hierarchy, student enrollment/cohorts, faculty, infrastructure/capabilities, time, teaching, policies, scheduling/versioning, validation/conflicts, AI, and auditing.
 - Requirement-to-session expansion with weekly frequency.
-- Canonical atomic cohort occupancy for whole divisions, batches and combined classes.
-- Pre-solve candidate filtering for continuity, active state, capacity, type, required capabilities, blackouts and hard policies.
-- CP-SAT exact-one assignments; resource, faculty and cohort non-overlap; workload and consecutive limits; weighted preferences.
+- Canonical atomic cohort occupancy for whole divisions, batches, and combined classes.
+- Pre-solve candidate filtering for continuity, active state, capacity, type, required capabilities, blackouts, and hard policies.
+- CP-SAT exact-one assignments; resource, faculty, and cohort non-overlap; workload and consecutive limits; weighted preferences; objective contribution metrics.
 - Grounded no-candidate and global infeasibility diagnostics.
-- Independent validator and guarded manual-move API.
-- Version lifecycle and immutable published versions.
-- Entity-grounded, confirmation-based policy assistant and evidence-grounded assignment explanations.
-- Professional dashboard, setup lists, generation workflow, versioned/filterable timetable grid and AI conversation UI.
-- Bcrypt/JWT authentication, ADMIN/HOD mutation authorization, audit writes, security headers and rate limits.
-- Durable embedded PostgreSQL-compatible persistence with restart hydration.
-- Validated CSV import preview/confirmation and canonical timetable CSV export.
-- Faculty/resource availability editors, student enrollment, setup forms, manual move UI and lifecycle review/publish controls.
-- Phase 2 hardening: candidate-aware preflight, persisted faculty eligibility, required-resource and minimum-capacity enforcement, hard/soft daily-period policies, expanded independent validator, transactional generation/import/move, published immutability, ADMIN-only college-wide writes, setup/import reference checks, and grounded AI read tools.
+- Optimized independent validator and guarded manual-move API.
+- Version lifecycle, parent/child regeneration links, immutable published versions, and optimistic stale-update checks when clients supply version timestamps.
+- Role-scoped read APIs for dashboard data, collections, timetable versions, exports, and grounded AI read tools.
+- Truthful SQL-backed dashboard with explicit setup-required state for empty institutions.
+- Empty-institution setup support for academic years, buildings, floors, hierarchy entities, faculty, resources, requirements, and enrollments.
+- Configurable time profiles, working days, slots, breaks, and active-profile hydration.
+- Policy create/update/deactivate persistence and policy assistant proposal confirmation.
+- Immutable generation snapshots persisted in `GenerationRun.scope`.
+- Regeneration from existing versions with selected locked assignments.
+- Admin audit and AI-action query APIs plus UI access paths.
+- Persistent AI conversations with message history.
+- Dedicated timetable filters/views, faculty workload dashboard, combined-class participant editor, fallback-policy editor, and version diff panel.
+- CSV import preview/confirmation, CSV export, binary XLSX export, and binary PDF export.
+- In-process asynchronous generation mode via `POST /api/generation/run?async=true`; the default generation endpoint remains synchronous.
+- Dockerfile, docker-compose, production guide, and GitHub Actions CI workflow source.
+- Bcrypt/JWT authentication, ADMIN/HOD authorization boundaries, audit writes, security headers, and rate limits.
 
 ## Known limitations
 
-- Local mode uses embedded PGlite rather than a network PostgreSQL service. The checked-in migration is PostgreSQL-compatible, but deployment automation for a managed PostgreSQL instance is not included.
-- Availability and time-profile data are enforced and persisted, while dedicated visual calendar editors for every availability record remain basic.
-- The policy assistant supports resource preference/prohibition through a deterministic fallback and an optional OpenAI-compatible structured-output provider. Additional policy plug-ins can be added without changing the tool boundary.
-- CSV import and CSV timetable export are implemented; Excel and PDF renderers are not included.
+- Local mode uses embedded PGlite rather than a network PostgreSQL service. A PostgreSQL verification script and CI workflow are present, but real PostgreSQL execution depends on an available PostgreSQL service/runner.
+- Browser E2E coverage is present in source (`playwright.config.ts`, `apps/web/tests/e2e.spec.ts`), but execution requires installed Playwright browser binaries. Sandboxes without those binaries cannot run it.
+- The async generation path is in-process and fire-and-forget, not a durable external queue/worker with resumable progress.
+- Manual moves update draft/validated versions in place. They reject stale updates when clients provide `updatedAt`, but full copy-on-write edit versions are still future work.
+- Availability and time-profile data are enforced and persisted, while visual calendar editors remain basic.
 - Authentication uses signed eight-hour JWTs with bcrypt password hashes. Production deployment should connect institutional OIDC, rotate `JWT_SECRET`, and add refresh/session revocation.
-- Generation runs execute synchronously. Large institutions should move solving to a durable job worker with streamed progress.
-- Browser-level Playwright coverage is not included; domain, real solver and HTTP integration workflows are automated.
 
 ## Recommended next work
 
-1. Add Testcontainers coverage against network PostgreSQL and transactional optimistic concurrency.
-2. Expand visual availability/time-profile and enrollment editors.
-3. Move generation to a durable worker and stream progress.
-4. Add more typed policy plug-ins and multi-turn provider conversations.
-5. Add Excel/PDF exports and drag-and-drop interactions.
-6. Integrate institutional OIDC and browser-level Playwright coverage.
+1. Run and monitor the PostgreSQL verification workflow on a real CI runner/service.
+2. Run Playwright E2E in an environment with cached/installed browsers.
+3. Move async generation to a durable worker/queue with streamed progress.
+4. Implement copy-on-write edit versions and stricter SQL-level optimistic updates.
+5. Expand visual availability/time-profile and enrollment editors.
+6. Add more typed policy plug-ins, institutional OIDC, and drag-and-drop timetable interactions.
