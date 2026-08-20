@@ -1,4 +1,4 @@
-import express from 'express';import cors from 'cors';import helmet from 'helmet';import {rateLimit} from 'express-rate-limit';import {spawn} from 'node:child_process';import {fileURLToPath} from 'node:url';import {existsSync} from 'node:fs';import {randomUUID} from 'node:crypto';import XLSX from 'xlsx';import PDFDocument from 'pdfkit';
+import express from 'express';import cors from 'cors';import helmet from 'helmet';import {rateLimit} from 'express-rate-limit';import {spawn} from 'node:child_process';import {fileURLToPath} from 'node:url';import {existsSync} from 'node:fs';import {randomUUID} from 'node:crypto';import PDFDocument from 'pdfkit';
 import {analyzeCandidates,PolicySchema,SolverInputSchema,validateTimetable,type SolverResult} from '@chronos/domain';
 import {collections,departments,faculty,resources,policies,runs,slots,solverInput,versions,buildSessions,type Entity} from './store.js';
 import {ready,persistEntity,persistEntities,persistPolicy,persistGeneration,persistMove,persistTransition,audit,logAIAction,persistFacultyAvailability,persistResourceAvailability,nextVersionNumber,db,withTransaction} from './db.js';
@@ -7,6 +7,7 @@ import {authenticate,authorize,currentUser,login} from './auth.js';
 import {createSchemas} from './setup-schemas.js';
 import {referenceIssues} from './references.js';
 import {groundedTools,inferTool,runGroundedTool,isSessionForStudent} from './ai-tools.js';
+import {createXlsxWorkbook} from './xlsx-export.js';
 
 const schedulerPath=fileURLToPath(new URL('../../../scheduler/solve.py',import.meta.url));
 const localPython=fileURLToPath(new URL('../../../.venv/bin/python',import.meta.url));
@@ -598,6 +599,7 @@ app.get('/api/timetables/versions/:id/export.xlsx', async (req, res, next) => {
       }) : [];
     }
 
+    const columns = ['Subject Code', 'Session Title', 'Faculty', 'Resource', 'Day', 'Start Time', 'End Time', 'Cohorts'];
     const dataRows = assignments.map(a => {
       const s = sessions.find(x => x.id === a.sessionId)!;
       const r = resources.find(x => x.id === a.resourceId)!;
@@ -614,11 +616,7 @@ app.get('/api/timetables/versions/:id/export.xlsx', async (req, res, next) => {
       };
     });
 
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(dataRows);
-    XLSX.utils.book_append_sheet(wb, ws, `Version ${v.version}`);
-    
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const buf = createXlsxWorkbook(dataRows, `Version ${v.version}`, columns);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename=chronos-version-${v.version}.xlsx`);
     res.send(buf);

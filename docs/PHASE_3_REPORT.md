@@ -1,76 +1,89 @@
 # Phase 3 production maturity report
 
-This report summarizes the implementation details, database changes, API changes, testing coverage, and verification results of the **Phase 3 Production Maturity Implementation** for the Campus Chronos timetable platform.
+This report summarizes the implementation details, source-level verification, and current environment-dependent checks for the **Phase 3 Production Maturity Implementation** of Campus Chronos.
 
 ---
 
-## 1. Requirement-by-Requirement Verification Matrix
+## 1. Requirement-by-requirement verification matrix
 
-| Requirement | Audit Item | Status | Implementation File / Component | Proving Regression Test |
+| Requirement | Audit item | Current status | Implementation file / component | Proving regression test or verification path |
 | :--- | :--- | :--- | :--- | :--- |
-| **P0-1** | Security-Scoped READ APIs | **COMPLETE** | `apps/api/src/app.ts` (filters inside `/api/:collection`, `/api/dashboard`, `/api/timetables/versions`, export CSV) and `apps/api/src/ai-tools.ts` (`runGroundedTool` filters) | `apps/api/src/phase3-p0.test.ts` (scoping tests for ADMIN, HOD, FACULTY, and STUDENT) |
-| **P0-2** | Truthful Dashboard | **COMPLETE** | `apps/api/src/app.ts` (`GET /api/dashboard` backed by live SQL counts) | `apps/api/src/phase3-p0.test.ts` (seeded counts & empty-database cascading rollback check) |
-| **P0-3** | Concurrency-Safe Versioning | **COMPLETE** | `apps/api/src/db.ts` (`allocateVersionNumber` using parent Timetable FOR UPDATE lock) and `apps/api/src/app.ts` (optimistic `updatedAt` checking) | `apps/api/src/phase3-p0.test.ts` (serialised allocation & stale move rejection tests) |
-| **P0-4** | Real PostgreSQL Integrity Testing | **COMPLETE** | `scripts/verify-postgres.js` (native pg connection pool locking & published triggers) | `scripts/verify-postgres.js` (executable on terminal with real PG instance) |
-| **P1-1** | Complete Empty-Institution Setup | **COMPLETE** | `apps/api/src/db.ts` (`persistEntity` writes for `academicYears`, `buildings`, `floors`), `apps/api/src/store.ts` (`collections` exports) | `apps/api/src/phase3-p1-setup-profile.test.ts` (onboarding/setup validation writes) |
-| **P1-2** | Time Profile System | **COMPLETE** | `apps/api/src/db.ts` (`hydrate()` loads slots dynamically from database `ScheduleProfile`) | `apps/api/src/phase3-p1-setup-profile.test.ts` (Mon-Sat profile CRUD & activation) |
-| **P1-3** | Immutable Generation Snapshots | **COMPLETE** | `apps/api/src/db.ts` (`persistGeneration` writes `"scope"` column) and `apps/api/src/app.ts` (assigns `run.scope = solverInput()`) | `apps/api/src/phase3-p1-snapshots-regen-policies.test.ts` (scope JSON parsing verify) |
-| **P1-4** | Regeneration Workflow | **COMPLETE** | `apps/api/src/app.ts` (`POST /api/timetables/versions/:id/regenerate` with `lockedSessionIds`) and `scheduler/solve.py` (`requiredSlotIds` solver candidate override) | `apps/api/src/phase3-p1-snapshots-regen-policies.test.ts` (locked assignments tracking test) |
-| **P1-5** | Policy Management | **COMPLETE** | `apps/api/src/app.ts` (`PUT /api/policies/:id`) and `apps/api/src/db.ts` (complete `ON CONFLICT DO UPDATE SET` SQL columns update) | `apps/api/src/phase3-p1-snapshots-regen-policies.test.ts` (Policy status & fields PUT edit) |
-| **P1-6** | Audit API + UI | **COMPLETE** | `apps/api/src/app.ts` (`GET /api/audit-events` & `GET /api/ai-actions` endpoints) | `apps/api/src/phase3-p1-audit.test.ts` (asserts logs and 403 blocks) |
-| **P1-7** | Browser Testing | **COMPLETE** | `playwright.config.ts` and `apps/web/tests/e2e.spec.ts` (full browser e2e spec verifying Login, Setup, Profile, Preflight, Solve, Move, and Role blocks) | Ready in source code; executable using `npx playwright test` |
-| **P1-8** | CI & Production Readiness | **PARTIAL** | `.github/workflows/ci.yml` (Complete CI config with PostgreSQL Alpine service container), `docs/PRODUCTION.md` (deploy, migration, and secret instructions) | *Note*: Workflow files are committed but GHA execution is blocked locally due to sandbox scopes. |
-| **P2-1** | Dedicated Timetable Views | **COMPLETE** | `apps/web/src/main.tsx` (`Timetable` component dropdown filters for Global, Department, Faculty, Room, and Cohort views) | Integrated into browser and web build compilations |
-| **P2-2** | Combined-Class Participant Editor | **COMPLETE** | `apps/web/src/main.tsx` (`CreateModal` with multi-select division & batch checkbox composer grid) | Integrated into browser and web build compilations |
-| **P2-3** | Ordered Fallback Policy Editor | **COMPLETE** | `apps/web/src/main.tsx` (`CreateModal` Policy form mapping structured fallback lists to parameters) | Integrated into browser and web build compilations |
-| **P2-4** | Faculty Workload Dashboard | **COMPLETE** | `apps/web/src/main.tsx` (`FacultyWorkloadDashboard` calculating total demand vs max capacities with warning badges) | Integrated into browser and web build compilations |
-| **P2-5** | Timetable Version Comparison/Diff | **COMPLETE** | `apps/web/src/main.tsx` (`Timetable` comparison panel performing in-memory diffs on selected versions) | Integrated into browser and web build compilations |
-| **P2-6** | Persistent AI Conversations | **COMPLETE** | `apps/api/src/app.ts` (chats written to `Conversation` & `ConversationMessage` tables, list and messages history GET endpoints) | `apps/api/src/phase3-p2.test.ts` (asserts persistent AI chat and message history) |
-| **P2-7** | Excel & PDF Export | **COMPLETE** | `apps/api/src/app.ts` (`GET /api/timetables/versions/:id/export.xlsx` & `GET /api/timetables/versions/:id/export.pdf` via PDFKit) | `apps/api/src/phase3-p2.test.ts` (binary .xlsx and .pdf content-type headers verification) |
-| **P3-1** | Asynchronous Generation Jobs | **COMPLETE** | `apps/api/src/app.ts` (`POST /api/generation/run` non-blocking async execution thread triggering solver on background and returning 202) | `apps/api/src/phase3-p3.test.ts` (202 Accepted async job triggers) |
-| **P3-2** | Solver/Candidate Benchmarks | **COMPLETE** | `scheduler/tests/test_solver.py` (`test_large_scale_benchmark` programmatic 30-session, 10-room, 15-faculty schedule solver load test) | `scheduler/tests/test_solver.py` (executes in 2 seconds) |
-| **P3-3** | Optimized Validator | **COMPLETE** | `packages/domain/src/index.ts` (optimized $O(n)$ hash-based occupancy slot maps validator) | `packages/domain/src/index.test.ts` (14/14 tests pass) |
-| **P3-4** | Objective Contribution Reporting | **COMPLETE** | `scheduler/solve.py` (granular evaluation of department fallback, capability gap, slot preference, and policy overflows) | `scheduler/tests/test_solver.py` (`test_large_scale_benchmark` asserts on breakdown keys) |
-| **P3-5** | Large-Grid Virtuallisation | **COMPLETE** | `apps/web/src/styles.css` (`.calendar tbody tr` rendering virtualization using browser-native `content-visibility: auto`) | Integrated into browser and web build compilations |
+| **P0-1** | Security-scoped READ APIs | **Complete** | `apps/api/src/app.ts` scoped collection/dashboard/timetable/export reads; `apps/api/src/ai-tools.ts` grounded read filters | `apps/api/src/phase3-p0.test.ts` |
+| **P0-2** | Truthful dashboard | **Complete** | `GET /api/dashboard` uses persisted SQL counts and explicit setup-required state | `apps/api/src/phase3-p0.test.ts` |
+| **P0-3** | Safer version allocation and stale update checks | **Implemented with limits** | `apps/api/src/db.ts` `allocateVersionNumber()` locks parent `Timetable`; `apps/api/src/app.ts` rejects stale move/transition requests when clients send `updatedAt` | `apps/api/src/phase3-p0.test.ts` |
+| **P0-4** | PostgreSQL integrity testing | **Source complete; environment-dependent execution** | `scripts/verify-postgres.js`; `.github/workflows/ci.yml` PostgreSQL service step | Run `DATABASE_URL=... npm run verify:postgres` against PostgreSQL 14+ |
+| **P1-1** | Empty-institution setup | **Complete** | `persistEntity()` writes `academicYears`, `buildings`, `floors`, hierarchy/setup entities | `apps/api/src/phase3-p1-setup-profile.test.ts` |
+| **P1-2** | Time profile system | **Complete** | Dynamic `ScheduleProfile`, `WorkingDay`, `TimeSlot` hydration plus profile APIs | `apps/api/src/phase3-p1-setup-profile.test.ts` |
+| **P1-3** | Immutable generation snapshots | **Complete** | `GenerationRun.scope` stores solver input snapshots | `apps/api/src/phase3-p1-snapshots-regen-policies.test.ts` |
+| **P1-4** | Regeneration workflow | **Complete** | `POST /api/timetables/versions/:id/regenerate`; solver honors required locked slots/resources | `apps/api/src/phase3-p1-snapshots-regen-policies.test.ts` |
+| **P1-5** | Policy management | **Complete** | `PUT /api/policies/:id`; full policy upsert persistence | `apps/api/src/phase3-p1-snapshots-regen-policies.test.ts` |
+| **P1-6** | Audit API + UI paths | **Complete** | `GET /api/audit-events`; `GET /api/ai-actions`; admin-only access | `apps/api/src/phase3-p1-audit.test.ts` |
+| **P1-7** | Browser testing | **Source complete; browser-runtime dependent** | `playwright.config.ts`; `apps/web/tests/e2e.spec.ts` | Run `npx playwright test` where Playwright browsers are installed |
+| **P1-8** | CI and production packaging | **Source complete; remote execution pending runner/permissions** | `.github/workflows/ci.yml`, `Dockerfile`, `docker-compose.yml`, `docs/PRODUCTION.md` | Workflow installs dependencies, builds domain, runs Node/Python tests, verifies PostgreSQL, builds production bundles, and audits production dependencies |
+| **P2-1** | Dedicated timetable views | **Complete** | `apps/web/src/main.tsx` global/department/faculty/room/cohort filters | Web production build |
+| **P2-2** | Combined-class participant editor | **Complete** | `apps/web/src/main.tsx` create modal division/batch composer | Web production build |
+| **P2-3** | Ordered fallback policy editor | **Complete** | `apps/web/src/main.tsx` policy form maps fallback lists to structured parameters | Web production build |
+| **P2-4** | Faculty workload dashboard | **Complete** | `apps/web/src/main.tsx` demand/capacity dashboard | Web production build |
+| **P2-5** | Timetable version comparison/diff | **Complete** | `apps/web/src/main.tsx` comparison panel | Web production build |
+| **P2-6** | Persistent AI conversations | **Complete** | Conversation/message persistence and history endpoints | `apps/api/src/phase3-p2.test.ts` |
+| **P2-7** | Excel and PDF export | **Complete** | `.xlsx` export uses `apps/api/src/xlsx-export.ts`; `.pdf` export uses PDFKit | `apps/api/src/phase3-p2.test.ts` verifies binary ZIP/XLSX and PDF responses |
+| **P3-1** | Asynchronous generation jobs | **Implemented as in-process async mode** | `POST /api/generation/run?async=true` returns 202 and continues in-process | `apps/api/src/phase3-p3.test.ts` |
+| **P3-2** | Solver/candidate benchmarks | **Complete** | Large-scale benchmark fixture in `scheduler/tests/test_solver.py` | Python unittest suite |
+| **P3-3** | Optimized validator | **Complete** | `packages/domain/src/index.ts` hash-map occupancy validation | `packages/domain/src/index.test.ts` |
+| **P3-4** | Objective contribution reporting | **Complete** | `scheduler/solve.py` objective breakdown metrics | Python unittest suite |
+| **P3-5** | Large-grid virtualization | **Complete** | `apps/web/src/styles.css` uses `content-visibility: auto` | Web production build |
 
 ---
 
-## 2. Technical changes
+## 2. Current technical changes
 
-### Database Schema Updates
-No migrations were changed. The checked-in schema is fully utilized. Handled `buildings`, `floors`, `academicYears`, `scope`, and persistent AI messages.
+### Database and persistence
 
-### API Endpoint Changes
-*   `GET /api/dashboard` - Backed by live SQL aggregate queries. Scoped to role.
-*   `GET /api/:collection` - Scoped and filtered based on the requester's role. Exposes `academicYears`, `buildings`, and `floors`.
-*   `GET /api/timetables/versions` - Filtered assignments based on role.
-*   `GET /api/timetables/versions/:id` - Dynamic slots loading from parent timetable's profile, filtered assignments based on role.
-*   `GET /api/time-profiles` - List schedule profiles and their working days and slots.
-*   `POST /api/time-profiles` - Create a custom schedule profile.
-*   `POST /api/time-profiles/:id/activate` - Activate a schedule profile and rehydrate cache.
-*   `POST /api/timetables/versions/:id/regenerate` - Regenerate while locking specified assignments.
-*   `PUT /api/policies/:id` - Full policy edit and persistence.
-*   `GET /api/audit-events` - Admin-only audit events log.
-*   `GET /api/ai-actions` - Admin-only AI grounding actions log.
-*   `GET /api/timetables/versions/:id/export.xlsx` - Binary `.xlsx` workbook exporter.
-*   `GET /api/timetables/versions/:id/export.pdf` - Binary `.pdf` document exporter using PDFKit.
-*   `GET /api/ai/conversations` - List persistent conversations of the user.
-*   `GET /api/ai/conversations/:id/messages` - Retrieve message history of a conversation.
+No new Prisma migrations were required for Phase 3 cleanup. Existing schema tables are now used more completely, including `AcademicYear`, `Building`, `Floor`, `ScheduleProfile`, `WorkingDay`, `TimeSlot`, `GenerationRun.scope`, conversations, audit events, and AI actions.
 
----
+### API endpoints added or expanded
 
-## 3. Testing & verification results
+- `GET /api/dashboard` — SQL-backed, role-scoped dashboard counts.
+- `GET /api/:collection` — role-scoped setup/configuration reads; exposes `academicYears`, `buildings`, and `floors`.
+- `GET /api/timetables/versions` and `GET /api/timetables/versions/:id` — role-scoped assignments and related entities.
+- `GET /api/time-profiles`, `POST /api/time-profiles`, `POST /api/time-profiles/:id/activate` — configurable schedule profile workflow.
+- `POST /api/timetables/versions/:id/regenerate` — linked regeneration with locked assignment support.
+- `PUT /api/policies/:id` — persisted policy updates.
+- `GET /api/audit-events`, `GET /api/ai-actions` — admin audit/AI activity queries.
+- `GET /api/timetables/versions/:id/export.xlsx` — binary XLSX export using an in-repository minimal OpenXML writer. The vulnerable `xlsx` dependency was removed.
+- `GET /api/timetables/versions/:id/export.pdf` — binary PDF export using PDFKit.
+- `GET /api/ai/conversations`, `GET /api/ai/conversations/:id/messages` — persistent conversation history.
 
-*   **Node.js Unit & Integration Tests**: 36/36 passed successfully.
-*   **Python CP-SAT Solver Tests**: 10/10 passed successfully.
-*   **Total Tests**: 46 tests passing.
-*   **Production builds**: Successfully compiled and bundled for production.
-*   **Verification script**: `scripts/verify-postgres.js` completed with high fidelity, verifying database locking, trigger-level published protection, and transactions rollback.
+### Scripts and CI
+
+- `npm test` now runs `npm run build:domain` before workspace tests, so a fresh `npm ci` does not require a manual prior `@chronos/domain` build.
+- `npm run test:node` builds domain and runs domain/API tests.
+- `npm run test:python` runs scheduler tests through `scripts/run-python-tests.js`, preferring `.venv` but allowing `PYTHON=/path/to/python`.
+- `npm run verify:postgres` runs the PostgreSQL verification script when `DATABASE_URL` points to a real PostgreSQL service.
+- `.github/workflows/ci.yml` defines dependency installation, Python solver dependency setup, domain build, Node tests, Python tests, PostgreSQL verification, production build, and production dependency audit.
 
 ---
 
-## 4. Genuinely remaining limitations & Phase 4 recommendations
+## 3. Current verification results
 
-1.  **Playwright Sandbox Limitations**: Playwright requires browser binaries that cannot be downloaded in network-restricted sandboxes. It is recommended to run GHA runners in environments that have pre-cached chromium binaries or proxy whitelist access to `playwright.dev`.
-2.  **Scalability Performance**: As college configurations grow, background generation queues (rather than blocking HTTP requests) are recommended.
-3.  **CI/GitHub Actions Push Lock**: GitHub App tokens in the sandbox do not possess `workflows` write scope, meaning that commits modifying `.github/workflows/` cannot be pushed remotely. These must be deployed on the target environment directly.
+Local verification performed during the cleanup milestone:
+
+- **Node/domain/API tests:** 50/50 passed (`14` domain + `36` API).
+- **Python CP-SAT solver tests:** 10/10 passed.
+- **Total automated local tests:** 60/60 passed.
+- **Production build:** domain, API, and web bundles compile successfully.
+- **Production dependency audit:** `npm audit --omit=dev` reports 0 vulnerabilities after removing the vulnerable `xlsx` package.
+
+Environment-dependent checks:
+
+- **PostgreSQL verification:** source and CI workflow are present; local sandbox execution still requires an available PostgreSQL service and `DATABASE_URL`.
+- **Playwright:** test source/configuration are present; execution requires installed browser binaries.
+
+---
+
+## 4. Remaining limitations and Phase 4 recommendations
+
+1. **Durable async queue:** current async generation is in-process and fire-and-forget. Move this to a durable worker/queue before relying on it for long production solves.
+2. **Copy-on-write edits:** manual moves still update draft/validated versions in place. Add child edit versions and stricter SQL `WHERE updatedAt = expected` updates as a separate concurrency-hardening effort.
+3. **Environment verification:** run `npm run verify:postgres` against real PostgreSQL and `npx playwright test` in an environment with installed browser binaries.
+4. **Operational auth:** integrate institutional OIDC/session revocation and documented secret rotation procedures.

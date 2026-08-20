@@ -55,7 +55,7 @@ Current tools are `interpretPolicy`, `createPolicy` (confirmation required), and
 
 ## Lifecycle and concurrency
 
-Allowed progression is `DRAFT → GENERATED → VALIDATED → REVIEWED → APPROVED → PUBLISHED`. A published version is immutable; edits require a child version. Generation, import confirmation and manual moves run inside database transactions. Published entry/slot mutation is rejected by the API and by PostgreSQL triggers. Generation runs capture status, session/candidate counts, duration, solver result, objective metrics and diagnostics. College-wide mutations are ADMIN-only until HOD department scoping exists. Demo seed data is explicit (`CHRONOS_SEED_DEMO=1` / `npm run db:seed`) and is not created by production bootstrap.
+Allowed progression is `DRAFT → GENERATED → VALIDATED → REVIEWED → APPROVED → PUBLISHED`. A published version is immutable. Regeneration creates linked child versions and can lock selected assignments; manual moves currently update draft/validated versions in place after independent validation. Generation, import confirmation and manual moves run inside database transactions. Published entry/slot mutation is rejected by the API and by PostgreSQL triggers. Generation runs capture status, immutable input scope, session/candidate counts, duration, solver result, objective metrics and diagnostics. College-wide mutations remain ADMIN-only; non-admin reads are role-scoped. Demo seed data is explicit (`CHRONOS_SEED_DEMO=1` / `npm run db:seed`) and is not created by production bootstrap.
 
 ## Risks and mitigations
 
@@ -63,10 +63,10 @@ Allowed progression is `DRAFT → GENERATED → VALIDATED → REVIEWED → APPRO
 - **Stale input during generation:** snapshot IDs/versions and hash sessions; never read mutable tables from the solver.
 - **Misleading infeasibility:** report candidate rejection counters separately from global collision infeasibility; never let an LLM invent causes.
 - **Policy explosion:** allow only registered rule types with typed parameter validators and version policies.
-- **Manual edit races:** transactional copy-on-write versions and optimistic locking.
+- **Manual edit races:** current API supports timestamp-based stale update rejection when clients supply `updatedAt`; full copy-on-write edit versions and stricter SQL-level optimistic updates remain planned hardening.
 - **Enrollment ambiguity:** explicit requirement participants and atomic cohort expansion; validate that combined capacity does not double-count overlapping participants.
 - **LLM prompt injection:** minimum tool set, role checks, schema checks, confirmation, no unrestricted retrieval or database tools.
 
 ## Testing strategy
 
-Pure domain unit tests cover capabilities, capacity, continuity and cohort overlap. Scheduler tests run real OR-Tools for feasibility, grounded diagnostics, combined occupancy and workload. API integration tests execute the Python process, independent validation, authorization and AI confirmation/entity safety. Production should add Testcontainers PostgreSQL repository tests and Playwright browser workflows.
+Pure domain unit tests cover capabilities, capacity, continuity, cohort overlap and optimized validation behavior. Scheduler tests run real OR-Tools for feasibility, grounded diagnostics, combined occupancy, workload and benchmark/objective metrics. API integration tests execute the Python process, independent validation, authorization, scoped reads, exports, regeneration, audit APIs and AI confirmation/entity safety. The repository includes a PostgreSQL verification script and Playwright browser workflow source; those checks require a real PostgreSQL service and installed Playwright browser binaries respectively.

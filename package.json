@@ -9,11 +9,15 @@
   "scripts": {
     "dev": "CHRONOS_SEED_DEMO=1 concurrently -n api,web -c blue,green \"npm:dev -w @chronos/api\" \"npm:dev -w @chronos/web\"",
     "build": "npm run build -w @chronos/domain && npm run build -w @chronos/api && npm run build -w @chronos/web",
-    "test": "npm run test -w @chronos/domain && npm run test -w @chronos/api && .venv/bin/python -m unittest discover scheduler/tests",
+    "test": "npm run test:node && npm run test:python",
     "typecheck": "tsc -b",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "build:domain": "npm run build -w @chronos/domain",
+    "test:node": "npm run build:domain && npm run test -w @chronos/domain && npm run test -w @chronos/api",
+    "test:python": "node scripts/run-python-tests.js",
+    "verify:postgres": "node scripts/verify-postgres.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
@@ -33,7 +37,6 @@
     "express-rate-limit": "^8.6.2",
     "helmet": "^8.1.0",
     "jose": "^6.1.0",
-    "pdfkit": "^0.19.1",
-    "xlsx": "^0.18.5"
+    "pdfkit": "^0.19.1"
   }
 }
